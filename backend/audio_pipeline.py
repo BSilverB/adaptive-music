@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import json
 import glob
 import queue
@@ -15,6 +16,7 @@ import torch
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(BASE_DIR, "cache_stems")
 TRACKS_FILE = os.path.join(CACHE_DIR, "tracks.json")
+PLAYLISTS_FILE = os.path.join(CACHE_DIR, "playlists.json")
 DELETED_TRACKS_FILE = os.path.join(CACHE_DIR, "deleted_tracks.json")
 
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -64,6 +66,8 @@ class AudioPipeline:
         self.deleted_tracks: set = self._load_deleted_tracks()
         self.tracks: Dict[str, Dict[str, Any]] = self._load_tracks()
         self.clean_legacy_stems()
+        self.playlists_data: Dict[str, Any] = self._load_playlists()
+        self._sync_default_playlist()
 
         # Hàng đợi tải bài từ YouTube (Download Queue)
         self.download_queue: queue.Queue = queue.Queue()
@@ -167,7 +171,131 @@ class AudioPipeline:
             except Exception:
                 pass
 
+        if deleted:
+            self._sync_default_playlist()
+
         return deleted
+
+    # ==========================================
+    # QUẢN LÝ DANH SÁCH PHÁT (PLAYLISTS MANAGER)
+    # ==========================================
+
+    def _load_playlists(self) -> Dict[str, Any]:
+        default_structure = {
+            "playlists": {
+                "default": {
+                    "id": "default",
+                    "name": "Thư viện chính",
+                    "track_ids": [],
+                    "is_default": True,
+                    "created_at": time.time()
+                }
+            },
+            "active_playlist_id": "default"
+        }
+        if os.path.exists(PLAYLISTS_FILE):
+            try:
+                with open(PLAYLISTS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if "playlists" in data and "default" in data["playlists"]:
+                        return data
+            except Exception:
+                pass
+        return default_structure
+
+    def _save_playlists(self) -> None:
+        try:
+            with open(PLAYLISTS_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.playlists_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[AudioPipeline] Lỗi lưu playlists.json: {e}")
+
+    def _sync_default_playlist(self) -> None:
+        """Đồng bộ đảm bảo toàn bộ bài trong self.tracks có mặt trong default playlist và loại bỏ bài đã xóa."""
+        all_track_ids = set(self.tracks.keys())
+        playlists = self.playlists_data.get("playlists", {})
+        default_pl = playlists.get("default")
+        if not default_pl:
+            default_pl = {
+                "id": "default",
+                "name": "Thư viện chính",
+                "track_ids": [],
+                "is_default": True,
+                "created_at": time.time()
+            }
+            playlists["default"] = default_pl
+
+        # Giữ nguyên thứ tự bài cũ, loại bỏ bài không còn tồn tại
+        existing_ordered = [tid for tid in default_pl.get("track_ids", []) if tid in all_track_ids]
+        existing_set = set(existing_ordered)
+
+        # Bổ sung các bài mới chưa có vào cuối danh sách
+        for tid in self.tracks.keys():
+            if tid not in existing_set:
+                existing_ordered.append(tid)
+
+        default_pl["track_ids"] = existing_ordered
+
+        # Dọn dẹp bài đã xóa khỏi các custom playlists
+        for pl_id, pl in playlists.items():
+            if pl_id != "default":
+                pl["track_ids"] = [tid for tid in pl.get("track_ids", []) if tid in all_track_ids]
+
+        self._save_playlists()
+
+    def get_playlists_data(self) -> Dict[str, Any]:
+        self._sync_default_playlist()
+        return self.playlists_data
+
+    def create_playlist(self, name: str, track_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+        playlist_id = f"pl_{int(time.time() * 1000)}"
+        valid_ids = [tid for tid in (track_ids or []) if tid in self.tracks]
+        new_pl = {
+            "id": playlist_id,
+            "name": name.strip() or f"Playlist {len(self.playlists_data['playlists'])}",
+            "track_ids": valid_ids,
+            "is_default": False,
+            "created_at": time.time()
+        }
+        self.playlists_data["playlists"][playlist_id] = new_pl
+        self._save_playlists()
+        return new_pl
+
+    def update_playlist(self, playlist_id: str, name: Optional[str] = None, track_ids: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
+        pl = self.playlists_data["playlists"].get(playlist_id)
+        if not pl:
+            return None
+        if name is not None and name.strip() and not pl.get("is_default", False):
+            pl["name"] = name.strip()
+        if track_ids is not None:
+            pl["track_ids"] = [tid for tid in track_ids if tid in self.tracks]
+        self._save_playlists()
+        return pl
+
+    def delete_playlist(self, playlist_id: str) -> bool:
+        if playlist_id == "default" or playlist_id not in self.playlists_data["playlists"]:
+            return False
+        del self.playlists_data["playlists"][playlist_id]
+        if self.playlists_data.get("active_playlist_id") == playlist_id:
+            self.playlists_data["active_playlist_id"] = "default"
+        self._save_playlists()
+        return True
+
+    def reorder_playlist_tracks(self, playlist_id: str, track_ids: List[str]) -> Optional[Dict[str, Any]]:
+        pl = self.playlists_data["playlists"].get(playlist_id)
+        if not pl:
+            return None
+        valid_ids = [tid for tid in track_ids if tid in self.tracks]
+        pl["track_ids"] = valid_ids
+        self._save_playlists()
+        return pl
+
+    def set_active_playlist(self, playlist_id: str) -> bool:
+        if playlist_id in self.playlists_data["playlists"]:
+            self.playlists_data["active_playlist_id"] = playlist_id
+            self._save_playlists()
+            return True
+        return False
 
     def clean_legacy_stems(self) -> None:
         """Dọn dẹp các file calm_stem.mp3 và energy_stem.mp3 cũ để chuyển hoàn toàn sang 4 stems."""
@@ -289,6 +417,7 @@ class AudioPipeline:
 
         if synced_count > 0:
             self._save_tracks()
+            self._sync_default_playlist()
             print(f"[Drive Sync] Đã cập nhật {synced_count} bài từ Colab 4 Stems!")
 
         return synced_count
@@ -388,6 +517,7 @@ class AudioPipeline:
                             pass
 
         self._save_tracks()
+        self._sync_default_playlist()
 
         return {
             "is_playlist": is_playlist,

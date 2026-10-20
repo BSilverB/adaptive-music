@@ -14,6 +14,14 @@ export interface TrackMeta {
   bpm?: number;
 }
 
+export interface Playlist {
+  id: string;
+  name: string;
+  track_ids: string[];
+  is_default: boolean;
+  created_at?: number;
+}
+
 export type StemType = "vocals" | "other" | "bass" | "drums";
 
 export interface StemChannelState {
@@ -110,9 +118,43 @@ export class AdaptiveEngine {
   };
 
   private stateListeners: Set<() => void> = new Set();
+  private onTrackEndedCallback: (() => void) | null = null;
+  private isManuallyStopped: boolean = false;
+  private activePlaybackToken: number = 0;
 
   constructor() {
-    // Khởi tạo AudioContext sau user gesture
+    this.loadPersistedMixerState();
+  }
+
+  private loadPersistedMixerState(): void {
+    try {
+      const savedState = localStorage.getItem("adaptive_stem_mixer_state");
+      if (savedState) {
+        const parsed = JSON.parse(savedState);
+        if (parsed.vocals && parsed.other && parsed.bass && parsed.drums) {
+          this.stemState = parsed;
+        }
+      }
+      const savedMode = localStorage.getItem("adaptive_stem_mixer_mode");
+      if (savedMode === "auto" || savedMode === "manual") {
+        this.mixerMode = savedMode;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  private persistMixerState(): void {
+    try {
+      localStorage.setItem("adaptive_stem_mixer_state", JSON.stringify(this.stemState));
+      localStorage.setItem("adaptive_stem_mixer_mode", this.mixerMode);
+    } catch {
+      // ignore
+    }
+  }
+
+  public setOnTrackEnded(cb: (() => void) | null): void {
+    this.onTrackEndedCallback = cb;
   }
 
   public subscribe(cb: () => void): () => void {
@@ -147,6 +189,7 @@ export class AdaptiveEngine {
 
   public setMixerMode(mode: MixerMode): void {
     this.mixerMode = mode;
+    this.persistMixerState();
     this.applyAudioGraph(0.3);
     this.notifyListeners();
   }
@@ -162,12 +205,14 @@ export class AdaptiveEngine {
 
   public setStemVolume(stem: StemType, volume: number): void {
     this.stemState[stem].volume = Math.max(0.0, Math.min(1.0, volume));
+    this.persistMixerState();
     this.applyAudioGraph(0.1);
     this.notifyListeners();
   }
 
   public toggleMute(stem: StemType): void {
     this.stemState[stem].muted = !this.stemState[stem].muted;
+    this.persistMixerState();
     this.applyAudioGraph(0.3);
     this.notifyListeners();
   }
@@ -175,6 +220,7 @@ export class AdaptiveEngine {
   public toggleSolo(stem: StemType): void {
     const nextVal = !this.stemState[stem].solo;
     this.stemState[stem].solo = nextVal;
+    this.persistMixerState();
     this.applyAudioGraph(0.3);
     this.notifyListeners();
   }
@@ -189,6 +235,7 @@ export class AdaptiveEngine {
       this.stemState[s].solo = false;
     }
 
+    this.persistMixerState();
     this.applyAudioGraph(0.3);
     this.notifyListeners();
   }
@@ -234,6 +281,9 @@ export class AdaptiveEngine {
       this.currentTrackId = track.id;
     }
 
+    this.isPlaying = true;
+    this.isPaused = false;
+
     if (track.has_stems) {
       // Tải và giải mã 4 Stems đồng thời
       const needFetch = !this.buffers.vocals || !this.buffers.other || !this.buffers.bass || !this.buffers.drums;
@@ -260,8 +310,6 @@ export class AdaptiveEngine {
       this.startFallbackPlayback(offsetSec);
     }
 
-    this.isPlaying = true;
-    this.isPaused = false;
     this.notifyListeners();
   }
 
@@ -293,13 +341,15 @@ export class AdaptiveEngine {
 
     const stemTypes: StemType[] = ["vocals", "other", "bass", "drums"];
 
-    // Tạo các AudioBufferSourceNode và GainNode
+    // Tạo các AudioBufferSourceNode và GainNode với targetGain ban đầu được khóa chuẩn
     for (const stem of stemTypes) {
       const src = this.audioCtx.createBufferSource();
       src.buffer = this.buffers[stem];
       this.sources[stem] = src;
 
       const gain = this.audioCtx.createGain();
+      const initialGain = this.computeEffectiveGain(stem);
+      gain.gain.setValueAtTime(initialGain, now);
       this.stemGains[stem] = gain;
 
       src.connect(gain);
@@ -321,6 +371,17 @@ export class AdaptiveEngine {
     }
 
     this.playbackStartTime = scheduledTime - offsetSec;
+
+    // Lắng nghe sự kiện kết thúc bài hát
+    const token = ++this.activePlaybackToken;
+    this.isManuallyStopped = false;
+    this.sources.other?.addEventListener("ended", () => {
+      if (this.activePlaybackToken === token && !this.isManuallyStopped) {
+        if (this.onTrackEndedCallback) {
+          this.onTrackEndedCallback();
+        }
+      }
+    });
   }
 
   private startFallbackPlayback(offsetSec: number): void {
@@ -344,6 +405,16 @@ export class AdaptiveEngine {
     const scheduledTime = this.audioCtx.currentTime + 0.1;
     this.origSource.start(scheduledTime, offsetSec);
     this.playbackStartTime = scheduledTime - offsetSec;
+
+    const token = ++this.activePlaybackToken;
+    this.isManuallyStopped = false;
+    this.origSource.addEventListener("ended", () => {
+      if (this.activePlaybackToken === token && !this.isManuallyStopped) {
+        if (this.onTrackEndedCallback) {
+          this.onTrackEndedCallback();
+        }
+      }
+    });
   }
 
   public setEnergy(energy: number, rampTime: number = 1.0): void {
@@ -389,7 +460,7 @@ export class AdaptiveEngine {
   }
 
   private applyAudioGraph(rampTime: number): void {
-    if (!this.audioCtx || !this.isPlaying) return;
+    if (!this.audioCtx) return;
     const now = this.audioCtx.currentTime;
 
     // 1. Cập nhật Gain cho từng stem
@@ -465,6 +536,8 @@ export class AdaptiveEngine {
   }
 
   private stopSources(): void {
+    this.isManuallyStopped = true;
+    this.activePlaybackToken++;
     try {
       this.sources.vocals?.stop();
       this.sources.other?.stop();

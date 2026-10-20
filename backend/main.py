@@ -44,6 +44,20 @@ class EngineModeRequest(BaseModel):
 class DriveDirRequest(BaseModel):
     path: str
 
+class CreatePlaylistRequest(BaseModel):
+    name: str
+    track_ids: Optional[List[str]] = []
+
+class UpdatePlaylistRequest(BaseModel):
+    name: Optional[str] = None
+    track_ids: Optional[List[str]] = None
+
+class ReorderPlaylistRequest(BaseModel):
+    track_ids: List[str]
+
+class ActivePlaylistRequest(BaseModel):
+    playlist_id: str
+
 @app.get("/api/auth/token")
 def get_session_token():
     return {"token": SESSION_TOKEN}
@@ -70,6 +84,49 @@ def api_add_youtube(req: YouTubeRequest):
 def api_delete_track(track_id: str):
     audio_pipeline.delete_track(track_id)
     return {"status": "success", "deleted_id": track_id}
+
+# ==========================================
+# PLAYLISTS API ENDPOINTS
+# ==========================================
+
+@app.get("/api/playlists")
+def api_get_playlists():
+    return audio_pipeline.get_playlists_data()
+
+@app.post("/api/playlists")
+def api_create_playlist(req: CreatePlaylistRequest):
+    new_pl = audio_pipeline.create_playlist(req.name, req.track_ids)
+    return {"status": "success", "playlist": new_pl}
+
+@app.put("/api/playlists/{playlist_id}")
+def api_update_playlist(playlist_id: str, req: UpdatePlaylistRequest):
+    updated = audio_pipeline.update_playlist(playlist_id, req.name, req.track_ids)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Không tìm thấy Playlist")
+    return {"status": "success", "playlist": updated}
+
+@app.delete("/api/playlists/{playlist_id}")
+def api_delete_playlist(playlist_id: str):
+    if playlist_id == "default":
+        raise HTTPException(status_code=400, detail="Không thể xóa Thư viện chính")
+    deleted = audio_pipeline.delete_playlist(playlist_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Không tìm thấy Playlist")
+    return {"status": "success", "deleted_id": playlist_id}
+
+@app.post("/api/playlists/{playlist_id}/reorder")
+def api_reorder_playlist(playlist_id: str, req: ReorderPlaylistRequest):
+    reordered = audio_pipeline.reorder_playlist_tracks(playlist_id, req.track_ids)
+    if not reordered:
+        raise HTTPException(status_code=404, detail="Không tìm thấy Playlist")
+    return {"status": "success", "playlist": reordered}
+
+@app.post("/api/playlists/active")
+def api_set_active_playlist(req: ActivePlaylistRequest):
+    ok = audio_pipeline.set_active_playlist(req.playlist_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Không tìm thấy Playlist")
+    return {"status": "success", "active_playlist_id": req.playlist_id}
 
 @app.get("/api/tracks/{track_id}/audio/{stem_type}")
 def api_stream_audio(track_id: str, stem_type: str):
