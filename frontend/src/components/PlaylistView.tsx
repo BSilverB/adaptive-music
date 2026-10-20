@@ -113,9 +113,14 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
 
   // Map track_id sang TrackMeta theo đúng thứ tự của playlist
   const tracksMap = new Map(allTracks.map((t) => [t.id, t]));
-  const currentPlaylistTracks: TrackMeta[] = activePlaylist.track_ids
+  let currentPlaylistTracks: TrackMeta[] = (activePlaylist.track_ids || [])
     .map((id) => tracksMap.get(id))
     .filter((t): t is TrackMeta => Boolean(t));
+
+  // Fallback an toàn: Nếu là Thư viện chính (default) mà currentPlaylistTracks rỗng trong khi allTracks có bài, hiển thị allTracks
+  if (activePlaylist.is_default && currentPlaylistTracks.length === 0 && allTracks.length > 0) {
+    currentPlaylistTracks = allTracks;
+  }
 
   // Danh sách bài trong kho chưa có trong playlist này
   const unaddedTracks = allTracks.filter(

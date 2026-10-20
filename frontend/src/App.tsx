@@ -117,16 +117,20 @@ export function App() {
 
   // Playlist hiện tại đang active
   const currentPlaylist = useMemo(() => {
-    return (
-      playlists.find((p) => p.id === activePlaylistId) ||
-      playlists[0] || {
-        id: "default",
-        name: "Thư viện chính",
-        track_ids: [],
-        is_default: true,
+    const found = playlists.find((p) => p.id === activePlaylistId) || playlists[0];
+    if (found) {
+      if (found.is_default && (!found.track_ids || found.track_ids.length === 0) && tracks.length > 0) {
+        return { ...found, track_ids: tracks.map((t) => t.id) };
       }
-    );
-  }, [playlists, activePlaylistId]);
+      return found;
+    }
+    return {
+      id: "default",
+      name: "Thư viện chính",
+      track_ids: tracks.map((t) => t.id),
+      is_default: true,
+    };
+  }, [playlists, activePlaylistId, tracks]);
 
   const tracksMap = useMemo(() => {
     return new Map(tracks.map((t) => [t.id, t]));

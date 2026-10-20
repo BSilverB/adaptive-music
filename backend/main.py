@@ -1,7 +1,12 @@
 import os
+import sys
+
+# Đảm bảo thư mục backend luôn nằm trong sys.path dù chạy từ bất kỳ thư mục nào
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import secrets
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
