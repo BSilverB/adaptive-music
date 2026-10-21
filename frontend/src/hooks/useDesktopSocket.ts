@@ -6,6 +6,7 @@ export interface ActivityState {
   energy_level: number;
   state: "DEEP_FOCUS" | "THINKING" | "FATIGUE_NUDGE" | "MANUAL_BURST" | "BREAK_TIME";
   auto_fatigue_enabled: boolean;
+  burst_remaining_seconds?: number;
   pomodoro: {
     elapsed_seconds: number;
     in_break: boolean;
@@ -115,7 +116,7 @@ export function useDesktopSocket() {
     };
   }, [connect]);
 
-  const triggerBurst = async (durationSec: number = 30) => {
+  const triggerBurst = async (durationSec: number = 15) => {
     try {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ action: "BURST", duration: durationSec }));
@@ -128,6 +129,20 @@ export function useDesktopSocket() {
       }
     } catch (e) {
       console.error("Lỗi kích hoạt Burst:", e);
+    }
+  };
+
+  const cancelBurst = async () => {
+    try {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ action: "RESET_BURST" }));
+      } else {
+        await fetch("http://127.0.0.1:8000/api/controls/burst-cancel", {
+          method: "POST"
+        });
+      }
+    } catch (e) {
+      console.error("Lỗi hủy Burst:", e);
     }
   };
 
@@ -174,6 +189,7 @@ export function useDesktopSocket() {
     queue,
     tracksCount,
     triggerBurst,
+    cancelBurst,
     toggleAutoFatigue,
     forceSyncDrive,
     setEngineMode

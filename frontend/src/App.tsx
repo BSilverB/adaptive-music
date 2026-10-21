@@ -18,7 +18,7 @@ import { ActiveStemMixer } from "./components/ActiveStemMixer";
 import { PlaylistView } from "./components/PlaylistView";
 import { useDesktopSocket } from "./hooks/useDesktopSocket";
 import { adaptiveEngine } from "./audio/AdaptiveEngine";
-import type { TrackMeta, Playlist } from "./audio/AdaptiveEngine";
+import type { TrackMeta, Playlist, AmbientType } from "./audio/AdaptiveEngine";
 
 export function App() {
   const {
@@ -28,6 +28,7 @@ export function App() {
     queue,
     tracksCount,
     triggerBurst,
+    cancelBurst,
     toggleAutoFatigue,
     forceSyncDrive,
     setEngineMode,
@@ -43,6 +44,8 @@ export function App() {
   const [fallbackMode, setFallbackMode] = useState<"lofi" | "full">("lofi");
   const [mixerMode, setMixerMode] = useState(adaptiveEngine.getMixerMode());
   const [stemState, setStemState] = useState(adaptiveEngine.getStemState());
+  const [ambientType, setAmbientType] = useState<AmbientType>(adaptiveEngine.getAmbientType());
+  const [ambientVolume, setAmbientVolume] = useState<number>(adaptiveEngine.getAmbientVolume());
 
   // Shuffle & Repeat states
   const [isShuffle, setIsShuffle] = useState<boolean>(false);
@@ -54,6 +57,8 @@ export function App() {
     return adaptiveEngine.subscribe(() => {
       setMixerMode(adaptiveEngine.getMixerMode());
       setStemState(adaptiveEngine.getStemState());
+      setAmbientType(adaptiveEngine.getAmbientType());
+      setAmbientVolume(adaptiveEngine.getAmbientVolume());
     });
   }, []);
 
@@ -103,12 +108,16 @@ export function App() {
     return () => clearInterval(timer);
   }, [isPlaying]);
 
-  // Lắng nghe phím tắt toàn cục (Ctrl + Alt + Space)
+  // Lắng nghe phím tắt toàn cục (Ctrl + Shift + D hoặc Ctrl + Alt + Space)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.altKey && e.code === "Space") {
+      const isBurstKey =
+        (e.ctrlKey && e.altKey && e.code === "Space") ||
+        (e.ctrlKey && e.shiftKey && (e.key === "D" || e.key === "d"));
+
+      if (isBurstKey) {
         e.preventDefault();
-        triggerBurst(30);
+        triggerBurst(15);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -422,22 +431,27 @@ export function App() {
             <div className="flex flex-col justify-center rounded-2xl border border-slate-800/80 bg-slate-950/60 p-6 backdrop-blur-md">
               <FlowMeter
                 activity={activity}
-                onTriggerBurst={() => triggerBurst(30)}
+                onTriggerBurst={() => triggerBurst(15)}
+                onCancelBurst={cancelBurst}
                 onToggleAutoFatigue={toggleAutoFatigue}
               />
             </div>
 
-            {/* Bàn Mini-Mixer 4 Kênh */}
+            {/* Bàn Mini-Mixer 4 Kênh & Tầng Âm Thanh Bí Mật (Binaural Beats / Brown Noise) */}
             <ActiveStemMixer
               hasStems={Boolean(currentTrack?.has_stems)}
               mixerMode={mixerMode}
               stemState={stemState}
               energyLevel={activity.energy_level}
+              ambientType={ambientType}
+              ambientVolume={ambientVolume}
               onSetMixerMode={(mode) => adaptiveEngine.setMixerMode(mode)}
               onSetVolume={(stem, vol) => adaptiveEngine.setStemVolume(stem, vol)}
               onToggleMute={(stem) => adaptiveEngine.toggleMute(stem)}
               onToggleSolo={(stem) => adaptiveEngine.toggleSolo(stem)}
               onApplyPreset={(preset) => adaptiveEngine.applyPreset(preset)}
+              onSetAmbientType={(type) => adaptiveEngine.setAmbientType(type)}
+              onSetAmbientVolume={(vol) => adaptiveEngine.setAmbientVolume(vol)}
             />
           </div>
 

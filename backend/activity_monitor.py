@@ -57,12 +57,18 @@ class ActivityMonitor:
             pass
         return 0.0
 
-    def trigger_manual_burst(self, duration_seconds: float = 30.0) -> None:
-        """Kích hoạt Drop-Beat toàn phần thủ công (S_energy = 1.0)"""
+    def trigger_manual_burst(self, duration_seconds: float = 15.0) -> None:
+        """Kích hoạt Drop-Beat toàn phần thủ công (S_energy = 1.0) trong 15s"""
         now = time.time()
         self.manual_burst_expiry_timestamp = now + duration_seconds
         self.energy_level = 1.0
         self.current_state = "MANUAL_BURST"
+
+    def cancel_manual_burst(self) -> None:
+        """Hủy drop-beat tức thì, phục hồi về chế độ làm việc/tập trung"""
+        self.manual_burst_expiry_timestamp = 0.0
+        self.energy_level = 0.0
+        self.current_state = "DEEP_FOCUS"
 
     def set_auto_fatigue(self, enabled: bool) -> None:
         self.auto_fatigue_enabled = enabled
@@ -129,11 +135,14 @@ class ActivityMonitor:
         return self._build_status(idle_sec)
 
     def _build_status(self, idle_sec: float) -> Dict[str, Any]:
+        now = time.time()
+        burst_remaining = max(0.0, round(self.manual_burst_expiry_timestamp - now, 1)) if self.manual_burst_expiry_timestamp > now else 0.0
         return {
             "idle_seconds": round(idle_sec, 1),
             "energy_level": round(self.energy_level, 2),
             "state": self.current_state,
             "auto_fatigue_enabled": self.auto_fatigue_enabled,
+            "burst_remaining_seconds": burst_remaining,
             "pomodoro": {
                 "elapsed_seconds": int(time.time() - self.pomodoro_start_time),
                 "in_break": self.in_break

@@ -8,6 +8,8 @@ import {
   Sparkles,
   Layers,
   Radio,
+  Brain,
+  Wind,
 } from "lucide-react";
 import {
   STEM_PRESETS,
@@ -15,6 +17,7 @@ import {
   type StemMixerState,
   type MixerMode,
   type PresetName,
+  type AmbientType,
 } from "../audio/AdaptiveEngine";
 
 interface ActiveStemMixerProps {
@@ -22,11 +25,15 @@ interface ActiveStemMixerProps {
   mixerMode: MixerMode;
   stemState: StemMixerState;
   energyLevel: number;
+  ambientType: AmbientType;
+  ambientVolume: number;
   onSetMixerMode: (mode: MixerMode) => void;
   onSetVolume: (stem: StemType, vol: number) => void;
   onToggleMute: (stem: StemType) => void;
   onToggleSolo: (stem: StemType) => void;
   onApplyPreset: (presetId: PresetName) => void;
+  onSetAmbientType: (type: AmbientType) => void;
+  onSetAmbientVolume: (vol: number) => void;
 }
 
 const STEM_CONFIGS: Record<
@@ -99,11 +106,15 @@ export const ActiveStemMixer: React.FC<ActiveStemMixerProps> = ({
   mixerMode,
   stemState,
   energyLevel,
+  ambientType,
+  ambientVolume,
   onSetMixerMode,
   onSetVolume,
   onToggleMute,
   onToggleSolo,
   onApplyPreset,
+  onSetAmbientType,
+  onSetAmbientVolume,
 }) => {
   const anySolo = Object.values(stemState).some((s) => s.solo);
 
@@ -320,6 +331,92 @@ export const ActiveStemMixer: React.FC<ActiveStemMixerProps> = ({
             </div>
           );
         })}
+      </div>
+
+      {/* TẦNG ÂM THANH BÍ MẬT: BINAURAL BEATS (40HZ GAMMA) & BROWN NOISE */}
+      <div className="mt-4 rounded-xl border border-indigo-500/25 bg-gradient-to-r from-indigo-950/40 via-purple-950/25 to-slate-950/60 p-3.5 backdrop-blur-md">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-indigo-500/40 bg-indigo-900/40 text-indigo-400 shadow-[0_0_12px_rgba(99,102,241,0.35)]">
+              <Brain className="h-4 w-4 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-indigo-300">
+                  Tầng Âm Thanh Bí Mật
+                </span>
+                <span className="rounded bg-indigo-900/60 border border-indigo-500/30 px-1.5 py-0.5 text-[9px] font-mono text-indigo-300">
+                  HYPERFOCUS
+                </span>
+              </div>
+              <p className="text-[10px] text-slate-400">
+                Sóng não 40Hz Gamma hoặc tiếng ồn nâu che lấp tạp âm, tự động hòa quyện dưới bài hát
+              </p>
+            </div>
+          </div>
+
+          {/* Selector 3 chế độ */}
+          <div className="flex items-center rounded-lg border border-slate-800 bg-slate-900/90 p-0.5 text-[11px] font-medium">
+            <button
+              onClick={() => onSetAmbientType("off")}
+              className={`rounded px-2.5 py-1 transition-all ${
+                ambientType === "off"
+                  ? "bg-slate-800 text-slate-200 shadow-sm"
+                  : "text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              Tắt
+            </button>
+            <button
+              onClick={() => onSetAmbientType("binaural_40hz")}
+              className={`flex items-center gap-1.5 rounded px-2.5 py-1 transition-all ${
+                ambientType === "binaural_40hz"
+                  ? "bg-indigo-600 text-white shadow-[0_0_12px_rgba(79,70,229,0.5)] font-semibold"
+                  : "text-indigo-400/80 hover:text-indigo-300"
+              }`}
+              title="Phát sóng não 40Hz Gamma (Stereo lệch 40Hz giữa 2 tai để kích hoạt Hyperfocus)"
+            >
+              <Brain className="h-3 w-3" />
+              <span>40Hz Gamma</span>
+            </button>
+            <button
+              onClick={() => onSetAmbientType("brown_noise")}
+              className={`flex items-center gap-1.5 rounded px-2.5 py-1 transition-all ${
+                ambientType === "brown_noise"
+                  ? "bg-amber-600 text-white shadow-[0_0_12px_rgba(217,119,6,0.5)] font-semibold"
+                  : "text-amber-400/80 hover:text-amber-300"
+              }`}
+              title="Phát tiếng ồn nâu êm dịu (Brown Noise)"
+            >
+              <Wind className="h-3 w-3" />
+              <span>Brown Noise</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Fader điều chỉnh âm lượng nền (1% - 15%) khi bật */}
+        {ambientType !== "off" && (
+          <div className="mt-3 flex items-center gap-3 border-t border-indigo-500/15 pt-2.5">
+            <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider shrink-0">
+              Âm lượng nền:
+            </span>
+            <input
+              type="range"
+              min="0.01"
+              max="0.15"
+              step="0.01"
+              value={ambientVolume}
+              onChange={(e) => onSetAmbientVolume(parseFloat(e.target.value))}
+              className="h-1.5 flex-1 cursor-pointer appearance-none rounded-lg bg-slate-900 border border-slate-800 accent-indigo-400"
+            />
+            <span className="w-12 text-right font-mono text-[11px] font-bold text-indigo-400">
+              {Math.round(ambientVolume * 100)}%
+            </span>
+            <span className="text-[10px] text-slate-500">
+              (ngưỡng vàng 3–5%)
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -33,6 +33,7 @@ export interface StemChannelState {
 export type StemMixerState = Record<StemType, StemChannelState>;
 export type MixerMode = "auto" | "manual";
 export type PresetName = "full" | "deep_focus" | "acoustic" | "rhythm";
+export type AmbientType = "off" | "binaural_40hz" | "brown_noise";
 
 export const STEM_PRESETS: Record<
   PresetName,
@@ -117,6 +118,31 @@ export class AdaptiveEngine {
     drums: { volume: 1.0, muted: false, solo: false },
   };
 
+  // Ambient / Binaural Beats & Brown Noise Layer
+  private ambientType: AmbientType = "off";
+  private ambientVolume: number = 0.04; // 4% default
+  private ambientGain: GainNode | null = null;
+  private binauralOscLeft: OscillatorNode | null = null;
+  private binauralOscRight: OscillatorNode | null = null;
+  private brownNoiseSource: AudioBufferSourceNode | null = null;
+  private brownNoiseFilter: BiquadFilterNode | null = null;
+
+  // Real-time 4-Stem Analyser Nodes for Cyberpunk Visualizer
+  private stemAnalysers: Record<StemType, AnalyserNode | null> = {
+    vocals: null,
+    other: null,
+    bass: null,
+    drums: null,
+  };
+  private masterAnalyser: AnalyserNode | null = null;
+  private analyserFrequencyData: Record<StemType, Uint8Array<ArrayBuffer>> = {
+    vocals: new Uint8Array(new ArrayBuffer(32)),
+    other: new Uint8Array(new ArrayBuffer(32)),
+    bass: new Uint8Array(new ArrayBuffer(32)),
+    drums: new Uint8Array(new ArrayBuffer(32)),
+  };
+  private masterWaveformData: Uint8Array<ArrayBuffer> = new Uint8Array(new ArrayBuffer(64));
+
   private stateListeners: Set<() => void> = new Set();
   private onTrackEndedCallback: (() => void) | null = null;
   private isManuallyStopped: boolean = false;
@@ -139,6 +165,17 @@ export class AdaptiveEngine {
       if (savedMode === "auto" || savedMode === "manual") {
         this.mixerMode = savedMode;
       }
+      const savedAmbientType = localStorage.getItem("adaptive_ambient_type");
+      if (savedAmbientType === "off" || savedAmbientType === "binaural_40hz" || savedAmbientType === "brown_noise") {
+        this.ambientType = savedAmbientType;
+      }
+      const savedAmbientVol = localStorage.getItem("adaptive_ambient_volume");
+      if (savedAmbientVol !== null) {
+        const parsedVol = parseFloat(savedAmbientVol);
+        if (!isNaN(parsedVol)) {
+          this.ambientVolume = Math.max(0.0, Math.min(0.20, parsedVol));
+        }
+      }
     } catch {
       // ignore
     }
@@ -148,6 +185,8 @@ export class AdaptiveEngine {
     try {
       localStorage.setItem("adaptive_stem_mixer_state", JSON.stringify(this.stemState));
       localStorage.setItem("adaptive_stem_mixer_mode", this.mixerMode);
+      localStorage.setItem("adaptive_ambient_type", this.ambientType);
+      localStorage.setItem("adaptive_ambient_volume", this.ambientVolume.toString());
     } catch {
       // ignore
     }
@@ -240,6 +279,195 @@ export class AdaptiveEngine {
     this.notifyListeners();
   }
 
+  // --- AMBIENT SOUND LAYER (BINAURAL BEATS & BROWN NOISE) ---
+  public getAmbientType(): AmbientType {
+    return this.ambientType;
+  }
+
+  public setAmbientType(type: AmbientType): void {
+    this.ambientType = type;
+    this.persistMixerState();
+    this.initContext();
+    this.applyAmbientGraph(0.5);
+    this.notifyListeners();
+  }
+
+  public getAmbientVolume(): number {
+    return this.ambientVolume;
+  }
+
+  public setAmbientVolume(vol: number): void {
+    this.ambientVolume = Math.max(0.01, Math.min(0.20, vol));
+    this.persistMixerState();
+    this.applyAmbientGraph(0.2);
+    this.notifyListeners();
+  }
+
+  private generateBrownNoiseBuffer(): AudioBuffer | null {
+    if (!this.audioCtx) return null;
+    const sampleRate = this.audioCtx.sampleRate;
+    const bufferSize = sampleRate * 5; // 5s seamless loop
+    const buffer = this.audioCtx.createBuffer(2, bufferSize, sampleRate);
+    for (let channel = 0; channel < 2; channel++) {
+      const data = buffer.getChannelData(channel);
+      let lastOut = 0.0;
+      for (let i = 0; i < bufferSize; i++) {
+        const white = Math.random() * 2 - 1;
+        data[i] = (lastOut + 0.02 * white) / 1.02;
+        lastOut = data[i];
+        data[i] *= 3.5; // Gain compensation
+      }
+    }
+    return buffer;
+  }
+
+  private stopAmbientNodes(): void {
+    if (this.binauralOscLeft) {
+      try { this.binauralOscLeft.stop(); } catch { /* ignore */ }
+      this.binauralOscLeft.disconnect();
+      this.binauralOscLeft = null;
+    }
+    if (this.binauralOscRight) {
+      try { this.binauralOscRight.stop(); } catch { /* ignore */ }
+      this.binauralOscRight.disconnect();
+      this.binauralOscRight = null;
+    }
+    if (this.brownNoiseSource) {
+      try { this.brownNoiseSource.stop(); } catch { /* ignore */ }
+      this.brownNoiseSource.disconnect();
+      this.brownNoiseSource = null;
+    }
+    if (this.brownNoiseFilter) {
+      this.brownNoiseFilter.disconnect();
+      this.brownNoiseFilter = null;
+    }
+  }
+
+  private applyAmbientGraph(rampTime: number = 0.4): void {
+    if (!this.audioCtx) return;
+    const now = this.audioCtx.currentTime;
+
+    if (!this.ambientGain) {
+      this.ambientGain = this.audioCtx.createGain();
+      this.ambientGain.gain.setValueAtTime(0.0, now);
+      this.ambientGain.connect(this.audioCtx.destination);
+    }
+
+    if (this.ambientType === "off" || (!this.isPlaying && !this.isPaused)) {
+      this.ambientGain.gain.cancelScheduledValues(now);
+      this.ambientGain.gain.linearRampToValueAtTime(0.0, now + rampTime);
+      setTimeout(() => {
+        if (this.ambientType === "off" || (!this.isPlaying && !this.isPaused)) {
+          this.stopAmbientNodes();
+        }
+      }, rampTime * 1000 + 50);
+      return;
+    }
+
+    // Auto-duck âm thanh bí mật khi bùng nổ Overdrive / Drop Beat để dồn lực vào tiếng đập
+    const isHighEnergy = this.currentEnergy > 0.6;
+    const targetGain = isHighEnergy ? 0.0 : this.ambientVolume;
+
+    if (this.ambientType === "binaural_40hz") {
+      if (!this.binauralOscLeft || !this.binauralOscRight) {
+        this.stopAmbientNodes();
+        const merger = this.audioCtx.createChannelMerger(2);
+
+        // 200 Hz Left, 240 Hz Right -> Độ lệch 40 Hz Gamma kích hoạt Hyperfocus
+        const oscL = this.audioCtx.createOscillator();
+        oscL.type = "sine";
+        oscL.frequency.setValueAtTime(200, now);
+
+        const oscR = this.audioCtx.createOscillator();
+        oscR.type = "sine";
+        oscR.frequency.setValueAtTime(240, now);
+
+        oscL.connect(merger, 0, 0);
+        oscR.connect(merger, 0, 1);
+        merger.connect(this.ambientGain);
+
+        oscL.start(now);
+        oscR.start(now);
+
+        this.binauralOscLeft = oscL;
+        this.binauralOscRight = oscR;
+      }
+    } else if (this.ambientType === "brown_noise") {
+      if (!this.brownNoiseSource) {
+        this.stopAmbientNodes();
+        const noiseBuf = this.generateBrownNoiseBuffer();
+        if (noiseBuf) {
+          const src = this.audioCtx.createBufferSource();
+          src.buffer = noiseBuf;
+          src.loop = true;
+
+          const filter = this.audioCtx.createBiquadFilter();
+          filter.type = "lowpass";
+          filter.frequency.setValueAtTime(800, now);
+
+          src.connect(filter);
+          filter.connect(this.ambientGain);
+          src.start(now);
+
+          this.brownNoiseSource = src;
+          this.brownNoiseFilter = filter;
+        }
+      }
+    }
+
+    this.ambientGain.gain.cancelScheduledValues(now);
+    this.ambientGain.gain.linearRampToValueAtTime(targetGain, now + rampTime);
+  }
+
+  // --- 4-STEM CYBERPUNK VISUALIZER DATA ACCESSOR ---
+  public getVisualizerData(): {
+    stems: Record<StemType, number>;
+    masterLevel: number;
+    frequencies: Record<StemType, Uint8Array>;
+    waveform: Uint8Array;
+    isPlaying: boolean;
+  } {
+    const res = {
+      stems: { vocals: 0, other: 0, bass: 0, drums: 0 },
+      masterLevel: 0,
+      frequencies: this.analyserFrequencyData,
+      waveform: this.masterWaveformData,
+      isPlaying: this.isPlaying && !this.isPaused,
+    };
+
+    if (!this.audioCtx || !this.isPlaying || this.isPaused) {
+      return res;
+    }
+
+    if (this.masterAnalyser) {
+      this.masterAnalyser.getByteTimeDomainData(this.masterWaveformData);
+      let sum = 0;
+      for (let i = 0; i < this.masterWaveformData.length; i++) {
+        const val = (this.masterWaveformData[i] - 128) / 128;
+        sum += val * val;
+      }
+      res.masterLevel = Math.min(1.0, Math.sqrt(sum / this.masterWaveformData.length) * 2.5);
+    }
+
+    const stemTypes: StemType[] = ["vocals", "other", "bass", "drums"];
+    for (const stem of stemTypes) {
+      const analyser = this.stemAnalysers[stem];
+      if (analyser) {
+        const arr = this.analyserFrequencyData[stem];
+        analyser.getByteFrequencyData(arr);
+        let sum = 0;
+        for (let i = 0; i < arr.length; i++) {
+          sum += arr[i];
+        }
+        res.stems[stem] = Math.min(1.0, (sum / (arr.length * 255)) * 1.8);
+      } else if (res.masterLevel > 0) {
+        res.stems[stem] = res.masterLevel * (stem === "bass" || stem === "drums" ? 0.8 : 0.6);
+      }
+    }
+
+    return res;
+  }
+
   public initContext(): AudioContext {
     if (!this.audioCtx) {
       const AudioContextClass =
@@ -329,10 +557,15 @@ export class AdaptiveEngine {
 
     const now = this.audioCtx.currentTime;
 
-    // Master Gain
+    // Master Gain & Master Analyser
     this.masterGain = this.audioCtx.createGain();
     this.masterGain.gain.setValueAtTime(1.0, now);
-    this.masterGain.connect(this.audioCtx.destination);
+
+    this.masterAnalyser = this.audioCtx.createAnalyser();
+    this.masterAnalyser.fftSize = 64;
+    this.masterAnalyser.smoothingTimeConstant = 0.8;
+    this.masterGain.connect(this.masterAnalyser);
+    this.masterAnalyser.connect(this.audioCtx.destination);
 
     // Dynamic Filter cho Drums & Bass
     this.rhythmFilter = this.audioCtx.createBiquadFilter();
@@ -341,7 +574,7 @@ export class AdaptiveEngine {
 
     const stemTypes: StemType[] = ["vocals", "other", "bass", "drums"];
 
-    // Tạo các AudioBufferSourceNode và GainNode với targetGain ban đầu được khóa chuẩn
+    // Tạo các AudioBufferSourceNode, GainNode và AnalyserNode cho từng Stem
     for (const stem of stemTypes) {
       const src = this.audioCtx.createBufferSource();
       src.buffer = this.buffers[stem];
@@ -352,17 +585,25 @@ export class AdaptiveEngine {
       gain.gain.setValueAtTime(initialGain, now);
       this.stemGains[stem] = gain;
 
+      // Stem Analyser Node
+      const stemAnalyser = this.audioCtx.createAnalyser();
+      stemAnalyser.fftSize = 64;
+      stemAnalyser.smoothingTimeConstant = 0.8;
+      this.stemAnalysers[stem] = stemAnalyser;
+
       src.connect(gain);
+      gain.connect(stemAnalyser);
 
       if (stem === "bass" || stem === "drums") {
-        gain.connect(this.rhythmFilter);
+        stemAnalyser.connect(this.rhythmFilter);
       } else {
-        gain.connect(this.masterGain);
+        stemAnalyser.connect(this.masterGain);
       }
     }
 
-    // Áp dụng thông số ban đầu
+    // Áp dụng thông số ban đầu & kích hoạt Ambient Layer nếu bật
     this.applyAudioGraph(0.05);
+    this.applyAmbientGraph(0.5);
 
     // Khóa pha 0ms: Xếp lịch chạy đồng thời tại 100ms trong tương lai
     const scheduledTime = now + 0.1;
@@ -389,7 +630,12 @@ export class AdaptiveEngine {
 
     this.masterGain = this.audioCtx.createGain();
     this.masterGain.gain.setValueAtTime(1.0, this.audioCtx.currentTime);
-    this.masterGain.connect(this.audioCtx.destination);
+
+    this.masterAnalyser = this.audioCtx.createAnalyser();
+    this.masterAnalyser.fftSize = 64;
+    this.masterAnalyser.smoothingTimeConstant = 0.8;
+    this.masterGain.connect(this.masterAnalyser);
+    this.masterAnalyser.connect(this.audioCtx.destination);
 
     this.origSource = this.audioCtx.createBufferSource();
     this.origSource.buffer = this.originalBuffer;
@@ -401,6 +647,7 @@ export class AdaptiveEngine {
     this.fallbackFilter.connect(this.masterGain);
 
     this.applyFallbackParameters(this.currentEnergy, 0.05);
+    this.applyAmbientGraph(0.5);
 
     const scheduledTime = this.audioCtx.currentTime + 0.1;
     this.origSource.start(scheduledTime, offsetSec);
@@ -419,7 +666,11 @@ export class AdaptiveEngine {
 
   public setEnergy(energy: number, rampTime: number = 1.0): void {
     this.currentEnergy = Math.max(0.0, Math.min(1.0, energy));
-    if (!this.audioCtx || !this.isPlaying) return;
+    if (!this.audioCtx) return;
+
+    this.applyAmbientGraph(rampTime);
+
+    if (!this.isPlaying) return;
 
     if (this.currentTrack?.has_stems) {
       this.applyAudioGraph(rampTime);
@@ -556,8 +807,15 @@ export class AdaptiveEngine {
 
     this.sources = { vocals: null, other: null, bass: null, drums: null };
     this.stemGains = { vocals: null, other: null, bass: null, drums: null };
+    Object.keys(this.stemAnalysers).forEach((k) => {
+      this.stemAnalysers[k as StemType]?.disconnect();
+      this.stemAnalysers[k as StemType] = null;
+    });
+    this.masterAnalyser?.disconnect();
+    this.masterAnalyser = null;
     this.origSource = null;
     this.rhythmFilter = null;
+    this.applyAmbientGraph(0.3);
   }
 
   public getCurrentTime(): number {
@@ -576,6 +834,8 @@ export class AdaptiveEngine {
       track: this.currentTrack,
       mixerMode: this.mixerMode,
       stemState: this.getStemState(),
+      ambientType: this.ambientType,
+      ambientVolume: this.ambientVolume,
     };
   }
 }

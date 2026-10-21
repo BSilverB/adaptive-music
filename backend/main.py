@@ -41,7 +41,7 @@ class AutoFatigueRequest(BaseModel):
     enabled: bool
 
 class BurstRequest(BaseModel):
-    duration_seconds: float = 30.0
+    duration_seconds: float = 15.0
 
 class EngineModeRequest(BaseModel):
     mode: str  # "COLAB_BATCH" | "LOCAL"
@@ -188,6 +188,11 @@ def api_trigger_burst(req: BurstRequest):
     monitor.trigger_manual_burst(req.duration_seconds)
     return {"status": "success", "state": monitor.current_state}
 
+@app.post("/api/controls/burst-cancel")
+def api_cancel_burst():
+    monitor.cancel_manual_burst()
+    return {"status": "success", "state": monitor.current_state}
+
 @app.post("/api/controls/auto-fatigue")
 def api_set_auto_fatigue(req: AutoFatigueRequest):
     monitor.set_auto_fatigue(req.enabled)
@@ -231,7 +236,9 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
             try:
                 data = await asyncio.wait_for(websocket.receive_json(), timeout=1.0)
                 if data.get("action") == "BURST":
-                    monitor.trigger_manual_burst(data.get("duration", 30.0))
+                    monitor.trigger_manual_burst(data.get("duration", 15.0))
+                elif data.get("action") == "RESET_BURST":
+                    monitor.cancel_manual_burst()
             except asyncio.TimeoutError:
                 pass
 
