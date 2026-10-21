@@ -34,6 +34,14 @@ export type StemMixerState = Record<StemType, StemChannelState>;
 export type MixerMode = "auto" | "manual";
 export type PresetName = "full" | "deep_focus" | "acoustic" | "rhythm";
 export type AmbientType = "off" | "binaural_40hz" | "brown_noise";
+export type Spatial8DSpeed = "slow" | "normal" | "fast"; // 45s, 35s, 20s
+export type Spatial8DVocalMode = "center" | "stage"; // Cố định tâm hoặc con lắc ±15°
+
+export interface Spatial8DState {
+  enabled: boolean;
+  speed: Spatial8DSpeed;
+  vocalMode: Spatial8DVocalMode;
+}
 
 export const STEM_PRESETS: Record<
   PresetName,
@@ -137,6 +145,19 @@ export class AdaptiveEngine {
   private preloadedBuffers: Record<StemType, AudioBuffer | null> | null = null;
   private preloadedOriginalBuffer: AudioBuffer | null = null;
 
+  // Binaural Spatial 8D Audio (HRTF 360° Orbit)
+  private spatial8D: Spatial8DState = {
+    enabled: false,
+    speed: "normal",
+    vocalMode: "center",
+  };
+  private pannerMelody: PannerNode | null = null;
+  private pannerVocals: PannerNode | null = null;
+  private spatialAnimId: number | null = null;
+  private spatialAngleMelody: number = 0;
+  private spatialAngleVocals: number = 0;
+  private lastSpatialTimestamp: number = 0;
+
   // Real-time 4-Stem Analyser Nodes for Cyberpunk Visualizer
   private stemAnalysers: Record<StemType, AnalyserNode | null> = {
     vocals: null,
@@ -190,6 +211,18 @@ export class AdaptiveEngine {
       if (savedDJCrossfade !== null) {
         this.djCrossfadeEnabled = savedDJCrossfade === "true";
       }
+      const saved8DEnabled = localStorage.getItem("adaptive_8d_enabled");
+      if (saved8DEnabled !== null) {
+        this.spatial8D.enabled = saved8DEnabled === "true";
+      }
+      const saved8DSpeed = localStorage.getItem("adaptive_8d_speed");
+      if (saved8DSpeed === "slow" || saved8DSpeed === "normal" || saved8DSpeed === "fast") {
+        this.spatial8D.speed = saved8DSpeed;
+      }
+      const saved8DVocal = localStorage.getItem("adaptive_8d_vocal_mode");
+      if (saved8DVocal === "center" || saved8DVocal === "stage") {
+        this.spatial8D.vocalMode = saved8DVocal;
+      }
     } catch {
       // ignore
     }
@@ -202,6 +235,9 @@ export class AdaptiveEngine {
       localStorage.setItem("adaptive_ambient_type", this.ambientType);
       localStorage.setItem("adaptive_ambient_volume", this.ambientVolume.toString());
       localStorage.setItem("adaptive_dj_crossfade", this.djCrossfadeEnabled.toString());
+      localStorage.setItem("adaptive_8d_enabled", this.spatial8D.enabled.toString());
+      localStorage.setItem("adaptive_8d_speed", this.spatial8D.speed);
+      localStorage.setItem("adaptive_8d_vocal_mode", this.spatial8D.vocalMode);
     } catch {
       // ignore
     }
@@ -498,6 +534,7 @@ export class AdaptiveEngine {
       this.duckingGain.gain.setValueAtTime(this.isDucked ? 0.10 : 1.0, this.audioCtx.currentTime);
       this.duckingGain.connect(this.audioCtx.destination);
     }
+    this.setupSpatialListener();
     return this.audioCtx;
   }
 
@@ -652,6 +689,215 @@ export class AdaptiveEngine {
     this.notifyListeners();
   }
 
+  // --- BINAURAL SPATIAL 8D CONTROLS & LOGIC ---
+  public setSpatial8DEnabled(enabled: boolean): void {
+    if (this.spatial8D.enabled === enabled) return;
+    this.spatial8D.enabled = enabled;
+    this.persistMixerState();
+    this.rebuildSpatialRouting();
+    if (enabled && this.isPlaying && !this.isPaused) {
+      this.startSpatialLoop();
+    } else if (!enabled) {
+      this.stopSpatialLoop();
+    }
+    this.notifyListeners();
+  }
+
+  public setSpatial8DSpeed(speed: Spatial8DSpeed): void {
+    this.spatial8D.speed = speed;
+    this.persistMixerState();
+    this.notifyListeners();
+  }
+
+  public setSpatial8DVocalMode(mode: Spatial8DVocalMode): void {
+    if (this.spatial8D.vocalMode === mode) return;
+    this.spatial8D.vocalMode = mode;
+    this.persistMixerState();
+    this.rebuildSpatialRouting();
+    this.notifyListeners();
+  }
+
+  public getSpatial8DState(): Spatial8DState {
+    return { ...this.spatial8D };
+  }
+
+  public getSpatial8DCoordinates(): {
+    melodyAngle: number;
+    vocalsX: number;
+    enabled: boolean;
+    speed: Spatial8DSpeed;
+    vocalMode: Spatial8DVocalMode;
+  } {
+    return {
+      melodyAngle: this.spatialAngleMelody,
+      vocalsX: 0.55 * Math.sin(this.spatialAngleVocals),
+      enabled: this.spatial8D.enabled,
+      speed: this.spatial8D.speed,
+      vocalMode: this.spatial8D.vocalMode,
+    };
+  }
+
+  private setupSpatialListener(): void {
+    if (!this.audioCtx) return;
+    const listener = this.audioCtx.listener;
+    try {
+      if (listener.positionX?.setValueAtTime) {
+        const now = this.audioCtx.currentTime;
+        listener.positionX.setValueAtTime(0, now);
+        listener.positionY.setValueAtTime(0, now);
+        listener.positionZ.setValueAtTime(0, now);
+        listener.forwardX.setValueAtTime(0, now);
+        listener.forwardY.setValueAtTime(0, now);
+        listener.forwardZ.setValueAtTime(-1, now);
+        listener.upX.setValueAtTime(0, now);
+        listener.upY.setValueAtTime(1, now);
+        listener.upZ.setValueAtTime(0, now);
+      } else {
+        (listener as any).setPosition(0, 0, 0);
+        (listener as any).setOrientation(0, 0, -1, 0, 1, 0);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  private startSpatialLoop(): void {
+    if (this.spatialAnimId !== null) return;
+    this.lastSpatialTimestamp = performance.now();
+
+    const loop = (timestamp: number) => {
+      this.spatialAnimId = requestAnimationFrame(loop);
+
+      if (!this.audioCtx || !this.isPlaying || this.isPaused || !this.spatial8D.enabled) {
+        return;
+      }
+
+      const dt = Math.min(0.1, (timestamp - this.lastSpatialTimestamp) / 1000);
+      this.lastSpatialTimestamp = timestamp;
+
+      // 45s (êm dịu) / 35s (chuẩn) / 20s (bay bổng)
+      const period =
+        this.spatial8D.speed === "slow"
+          ? 45
+          : this.spatial8D.speed === "fast"
+          ? 20
+          : 35;
+
+      const angularVelocity = (2 * Math.PI) / period;
+      this.spatialAngleMelody = (this.spatialAngleMelody + angularVelocity * dt) % (2 * Math.PI);
+
+      const now = this.audioCtx.currentTime;
+
+      // 1. Panner Melody (HRTF 360° Horizontal Ellipse)
+      if (this.pannerMelody) {
+        const rx = 2.2;
+        const rz = 2.5;
+        const x = rx * Math.sin(this.spatialAngleMelody);
+        const z = -rz * Math.cos(this.spatialAngleMelody);
+        const y = 0.15 * Math.sin(this.spatialAngleMelody);
+
+        try {
+          if (this.pannerMelody.positionX?.setValueAtTime) {
+            this.pannerMelody.positionX.setValueAtTime(x, now);
+            this.pannerMelody.positionY.setValueAtTime(y, now);
+            this.pannerMelody.positionZ.setValueAtTime(z, now);
+          } else {
+            (this.pannerMelody as any).setPosition(x, y, z);
+          }
+        } catch { /* ignore */ }
+      }
+
+      // 2. Panner Vocals (Stage Pendulum ±15° trước mặt)
+      if (this.pannerVocals && this.spatial8D.vocalMode === "stage") {
+        const vocalAngularVelocity = (2 * Math.PI) / 25; // 25s
+        this.spatialAngleVocals = (this.spatialAngleVocals + vocalAngularVelocity * dt) % (2 * Math.PI);
+        const vx = 0.55 * Math.sin(this.spatialAngleVocals);
+        const vz = -2.2;
+
+        try {
+          if (this.pannerVocals.positionX?.setValueAtTime) {
+            this.pannerVocals.positionX.setValueAtTime(vx, now);
+            this.pannerVocals.positionY.setValueAtTime(0, now);
+            this.pannerVocals.positionZ.setValueAtTime(vz, now);
+          } else {
+            (this.pannerVocals as any).setPosition(vx, 0, vz);
+          }
+        } catch { /* ignore */ }
+      }
+    };
+
+    this.spatialAnimId = requestAnimationFrame(loop);
+  }
+
+  private stopSpatialLoop(): void {
+    if (this.spatialAnimId !== null) {
+      cancelAnimationFrame(this.spatialAnimId);
+      this.spatialAnimId = null;
+    }
+  }
+
+  public rebuildSpatialRouting(): void {
+    if (!this.audioCtx || !this.isPlaying || !this.currentTrack?.has_stems) return;
+
+    // 1. Routing cho Melody (Other)
+    const melodyAnalyser = this.stemAnalysers.other;
+    if (melodyAnalyser && this.masterGain) {
+      try {
+        melodyAnalyser.disconnect();
+      } catch {}
+
+      if (this.pannerMelody) {
+        try {
+          this.pannerMelody.disconnect();
+        } catch {}
+        this.pannerMelody = null;
+      }
+
+      if (this.spatial8D.enabled) {
+        const panner = this.audioCtx.createPanner();
+        panner.panningModel = "HRTF";
+        panner.distanceModel = "inverse";
+        panner.refDistance = 1;
+        panner.maxDistance = 10000;
+        panner.rolloffFactor = 1;
+        panner.coneInnerAngle = 360;
+        this.pannerMelody = panner;
+
+        melodyAnalyser.connect(panner);
+        panner.connect(this.masterGain);
+      } else {
+        melodyAnalyser.connect(this.masterGain);
+      }
+    }
+
+    // 2. Routing cho Vocals
+    const vocalsAnalyser = this.stemAnalysers.vocals;
+    if (vocalsAnalyser && this.masterGain) {
+      try {
+        vocalsAnalyser.disconnect();
+      } catch {}
+
+      if (this.pannerVocals) {
+        try {
+          this.pannerVocals.disconnect();
+        } catch {}
+        this.pannerVocals = null;
+      }
+
+      if (this.spatial8D.enabled && this.spatial8D.vocalMode === "stage") {
+        const pannerV = this.audioCtx.createPanner();
+        pannerV.panningModel = "HRTF";
+        pannerV.distanceModel = "inverse";
+        this.pannerVocals = pannerV;
+
+        vocalsAnalyser.connect(pannerV);
+        pannerV.connect(this.masterGain);
+      } else {
+        vocalsAnalyser.connect(this.masterGain);
+      }
+    }
+  }
+
   public getContextState(): string {
     return this.audioCtx ? this.audioCtx.state : "uninitialized";
   }
@@ -775,8 +1021,32 @@ export class AdaptiveEngine {
 
       if (stem === "bass" || stem === "drums") {
         stemAnalyser.connect(this.rhythmFilter);
-      } else {
-        stemAnalyser.connect(this.masterGain);
+      } else if (stem === "other") {
+        if (this.spatial8D.enabled) {
+          const panner = this.audioCtx.createPanner();
+          panner.panningModel = "HRTF";
+          panner.distanceModel = "inverse";
+          panner.refDistance = 1;
+          panner.maxDistance = 10000;
+          panner.rolloffFactor = 1;
+          panner.coneInnerAngle = 360;
+          this.pannerMelody = panner;
+          stemAnalyser.connect(panner);
+          panner.connect(this.masterGain);
+        } else {
+          stemAnalyser.connect(this.masterGain);
+        }
+      } else if (stem === "vocals") {
+        if (this.spatial8D.enabled && this.spatial8D.vocalMode === "stage") {
+          const pannerV = this.audioCtx.createPanner();
+          pannerV.panningModel = "HRTF";
+          pannerV.distanceModel = "inverse";
+          this.pannerVocals = pannerV;
+          stemAnalyser.connect(pannerV);
+          pannerV.connect(this.masterGain);
+        } else {
+          stemAnalyser.connect(this.masterGain);
+        }
       }
     }
 
@@ -791,6 +1061,10 @@ export class AdaptiveEngine {
     }
 
     this.playbackStartTime = scheduledTime - offsetSec;
+
+    if (this.spatial8D.enabled) {
+      this.startSpatialLoop();
+    }
 
     // Lắng nghe sự kiện kết thúc bài hát
     const token = ++this.activePlaybackToken;
@@ -994,6 +1268,11 @@ export class AdaptiveEngine {
     this.masterAnalyser = null;
     this.origSource = null;
     this.rhythmFilter = null;
+    this.stopSpatialLoop();
+    this.pannerMelody?.disconnect();
+    this.pannerMelody = null;
+    this.pannerVocals?.disconnect();
+    this.pannerVocals = null;
     this.applyAmbientGraph(0.3);
   }
 
@@ -1017,6 +1296,7 @@ export class AdaptiveEngine {
       ambientVolume: this.ambientVolume,
       isDucked: this.isDucked,
       djCrossfadeEnabled: this.djCrossfadeEnabled,
+      spatial8D: this.getSpatial8DState(),
     };
   }
 }

@@ -10,6 +10,8 @@ import {
   Radio,
   Brain,
   Wind,
+  Headphones,
+  Compass,
 } from "lucide-react";
 import {
   STEM_PRESETS,
@@ -18,6 +20,9 @@ import {
   type MixerMode,
   type PresetName,
   type AmbientType,
+  type Spatial8DSpeed,
+  type Spatial8DVocalMode,
+  type Spatial8DState,
 } from "../audio/AdaptiveEngine";
 
 interface ActiveStemMixerProps {
@@ -27,6 +32,7 @@ interface ActiveStemMixerProps {
   energyLevel: number;
   ambientType: AmbientType;
   ambientVolume: number;
+  spatial8D: Spatial8DState;
   onSetMixerMode: (mode: MixerMode) => void;
   onSetVolume: (stem: StemType, vol: number) => void;
   onToggleMute: (stem: StemType) => void;
@@ -34,6 +40,9 @@ interface ActiveStemMixerProps {
   onApplyPreset: (presetId: PresetName) => void;
   onSetAmbientType: (type: AmbientType) => void;
   onSetAmbientVolume: (vol: number) => void;
+  onSetSpatial8DEnabled: (enabled: boolean) => void;
+  onSetSpatial8DSpeed: (speed: Spatial8DSpeed) => void;
+  onSetSpatial8DVocalMode: (mode: Spatial8DVocalMode) => void;
 }
 
 const STEM_CONFIGS: Record<
@@ -108,6 +117,7 @@ export const ActiveStemMixer: React.FC<ActiveStemMixerProps> = ({
   energyLevel,
   ambientType,
   ambientVolume,
+  spatial8D,
   onSetMixerMode,
   onSetVolume,
   onToggleMute,
@@ -115,6 +125,9 @@ export const ActiveStemMixer: React.FC<ActiveStemMixerProps> = ({
   onApplyPreset,
   onSetAmbientType,
   onSetAmbientVolume,
+  onSetSpatial8DEnabled,
+  onSetSpatial8DSpeed,
+  onSetSpatial8DVocalMode,
 }) => {
   const anySolo = Object.values(stemState).some((s) => s.solo);
 
@@ -415,6 +428,135 @@ export const ActiveStemMixer: React.FC<ActiveStemMixerProps> = ({
             <span className="text-[10px] text-slate-500">
               (ngưỡng vàng 3–5%)
             </span>
+          </div>
+        )}
+      </div>
+
+      {/* KHÔNG GIAN ÂM THANH 8D (BINAURAL SPATIAL 8D) */}
+      <div className="mt-4 rounded-xl border border-teal-500/25 bg-gradient-to-r from-teal-950/40 via-emerald-950/25 to-slate-950/60 p-3.5 backdrop-blur-md">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div
+              className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-all ${
+                spatial8D.enabled
+                  ? "border-teal-500/60 bg-teal-900/50 text-teal-300 shadow-[0_0_12px_rgba(20,184,166,0.4)]"
+                  : "border-slate-800 bg-slate-900/60 text-slate-500"
+              }`}
+            >
+              <Headphones className={`h-4 w-4 ${spatial8D.enabled ? "animate-pulse" : ""}`} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-teal-300">
+                  Binaural Spatial 8D
+                </span>
+                <span className="rounded bg-teal-900/60 border border-teal-500/30 px-1.5 py-0.5 text-[9px] font-mono text-teal-300">
+                  HRTF 3D
+                </span>
+                {spatial8D.enabled && (
+                  <span className="flex items-center gap-1 rounded bg-emerald-500/10 border border-emerald-500/30 px-1.5 py-0.5 text-[9px] font-mono text-emerald-400">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-ping" />
+                    ĐANG XOAY
+                  </span>
+                )}
+              </div>
+              <p className="text-[10px] text-slate-400">
+                Giai điệu lượn quanh đầu 360° | Drums & Bass ghim cố định tâm mỏ neo tránh chóng mặt
+              </p>
+            </div>
+          </div>
+
+          {/* Toggle Bật / Tắt 8D */}
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <button
+              onClick={() => onSetSpatial8DEnabled(!spatial8D.enabled)}
+              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all border ${
+                spatial8D.enabled
+                  ? "bg-teal-600 text-white border-teal-400 shadow-[0_0_15px_rgba(20,184,166,0.4)]"
+                  : "bg-slate-900/80 text-slate-400 border-slate-800 hover:text-slate-200 hover:border-slate-700"
+              }`}
+            >
+              <Compass className={`h-3.5 w-3.5 ${spatial8D.enabled ? "rotate-45 transition-transform" : ""}`} />
+              <span>{spatial8D.enabled ? "8D ĐANG BẬT" : "BẬT 8D"}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Tùy chỉnh chi tiết khi 8D Bật */}
+        {spatial8D.enabled && (
+          <div className="mt-3.5 pt-3 border-t border-teal-500/15 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-[11px]">
+            {/* Tốc độ xoay (35s Chuẩn / 45s Êm dịu / 20s Bay bổng) */}
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider shrink-0">
+                Tốc độ quỹ đạo:
+              </span>
+              <div className="flex items-center rounded-lg border border-slate-800 bg-slate-900/90 p-0.5 font-medium">
+                <button
+                  onClick={() => onSetSpatial8DSpeed("slow")}
+                  className={`rounded px-2.5 py-1 transition-all ${
+                    spatial8D.speed === "slow"
+                      ? "bg-teal-700 text-white font-semibold shadow-sm"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                  title="45 giây một vòng - Chậm rãi, êm dịu, thư thái sâu"
+                >
+                  45s Êm dịu
+                </button>
+                <button
+                  onClick={() => onSetSpatial8DSpeed("normal")}
+                  className={`rounded px-2.5 py-1 transition-all ${
+                    spatial8D.speed === "normal"
+                      ? "bg-teal-700 text-white font-semibold shadow-sm"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                  title="35 giây một vòng - Tỷ lệ vàng tự nhiên"
+                >
+                  35s Chuẩn
+                </button>
+                <button
+                  onClick={() => onSetSpatial8DSpeed("fast")}
+                  className={`rounded px-2.5 py-1 transition-all ${
+                    spatial8D.speed === "fast"
+                      ? "bg-teal-700 text-white font-semibold shadow-sm"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                  title="20 giây một vòng - Bay bổng, lãng đãng"
+                >
+                  20s Bay bổng
+                </button>
+              </div>
+            </div>
+
+            {/* Vocal Mode: Cố định tâm vs Stage Ambience */}
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider shrink-0">
+                Giọng hát (Vocal):
+              </span>
+              <div className="flex items-center rounded-lg border border-slate-800 bg-slate-900/90 p-0.5 font-medium">
+                <button
+                  onClick={() => onSetSpatial8DVocalMode("center")}
+                  className={`rounded px-2.5 py-1 transition-all ${
+                    spatial8D.vocalMode === "center"
+                      ? "bg-cyan-700 text-white font-semibold shadow-sm"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                  title="Ghim giọng hát tại chính giữa đỉnh đầu cùng Drums và Bass (Tối ưu Deep Work)"
+                >
+                  Cố định tâm
+                </button>
+                <button
+                  onClick={() => onSetSpatial8DVocalMode("stage")}
+                  className={`rounded px-2.5 py-1 transition-all ${
+                    spatial8D.vocalMode === "stage"
+                      ? "bg-cyan-700 text-white font-semibold shadow-sm"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                  title="Đung đưa nhẹ ±15° trước mặt như ca sĩ đứng trên sân khấu (Stage Ambience)"
+                >
+                  Đung đưa nhẹ ±15°
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

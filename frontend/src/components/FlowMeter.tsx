@@ -197,6 +197,68 @@ export const FlowMeter: React.FC<FlowMeterProps> = ({
         ctx.stroke();
       }
       ctx.restore();
+
+      // 7. BINAURAL SPATIAL 8D SATELLITE (Quỹ đạo 360° xoay quanh đỉnh đầu)
+      const spatial = adaptiveEngine.getSpatial8DCoordinates();
+      if (spatial.enabled) {
+        const orbitRadius = 146;
+
+        ctx.save();
+        // Vòng quỹ đạo đứt đoạn mờ ảo
+        ctx.beginPath();
+        ctx.setLineDash([3, 6]);
+        ctx.arc(cx, cy, orbitRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(16, 185, 129, 0.22)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Vệ tinh Melody (Xoay 360° HRTF quanh đầu)
+        const melX = cx + Math.sin(spatial.melodyAngle) * orbitRadius;
+        const melY = cy - Math.cos(spatial.melodyAngle) * orbitRadius;
+
+        // Quầng hào quang vệ tinh
+        ctx.beginPath();
+        ctx.arc(melX, melY, 7, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(16, 185, 129, 0.25)";
+        ctx.fill();
+
+        // Nhân vệ tinh phát sáng Neon Emerald
+        ctx.beginPath();
+        ctx.arc(melX, melY, 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = "#34d399";
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = "#10b981";
+        ctx.fill();
+
+        // Nhãn vệ tinh 8D nhỏ xinh
+        ctx.font = "9px monospace";
+        ctx.fillStyle = "rgba(167, 243, 208, 0.85)";
+        ctx.fillText("8D 🪐", melX + 7, melY + 3);
+
+        // Hiển thị con lắc Vocals nếu ở chế độ Stage Ambience (±15°)
+        if (spatial.vocalMode === "stage") {
+          const voxX = cx + spatial.vocalsX * 55;
+          const voxY = cy - orbitRadius;
+
+          // Cung đung đưa trước trán
+          ctx.beginPath();
+          ctx.setLineDash([2, 3]);
+          ctx.arc(cx, cy, orbitRadius, -Math.PI / 2 - 0.25, -Math.PI / 2 + 0.25);
+          ctx.strokeStyle = "rgba(6, 182, 212, 0.35)";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          // Chấm phát sáng con lắc Vocals
+          ctx.beginPath();
+          ctx.arc(voxX, voxY, 3, 0, Math.PI * 2);
+          ctx.fillStyle = "#22d3ee";
+          ctx.shadowBlur = 6;
+          ctx.shadowColor = "#06b6d4";
+          ctx.fill();
+        }
+
+        ctx.restore();
+      }
     };
 
     animId = requestAnimationFrame(render);

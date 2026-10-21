@@ -22,7 +22,7 @@ import { useDesktopSocket } from "./hooks/useDesktopSocket";
 import { useMeetingDucking } from "./hooks/useMeetingDucking";
 import { useFlowAnalytics } from "./hooks/useFlowAnalytics";
 import { adaptiveEngine } from "./audio/AdaptiveEngine";
-import type { TrackMeta, Playlist, AmbientType } from "./audio/AdaptiveEngine";
+import type { TrackMeta, Playlist, AmbientType, Spatial8DState } from "./audio/AdaptiveEngine";
 
 export function App() {
   const {
@@ -50,6 +50,7 @@ export function App() {
   const [stemState, setStemState] = useState(adaptiveEngine.getStemState());
   const [ambientType, setAmbientType] = useState<AmbientType>(adaptiveEngine.getAmbientType());
   const [ambientVolume, setAmbientVolume] = useState<number>(adaptiveEngine.getAmbientVolume());
+  const [spatial8D, setSpatial8D] = useState<Spatial8DState>(adaptiveEngine.getSpatial8DState());
   const [djCrossfade, setDjCrossfade] = useState<boolean>(adaptiveEngine.getDJCrossfadeEnabled());
   const [isTransitioning, setIsTransitioning] = useState<boolean>(false);
   const [isDevWrappedOpen, setIsDevWrappedOpen] = useState<boolean>(false);
@@ -86,6 +87,7 @@ export function App() {
       setStemState(adaptiveEngine.getStemState());
       setAmbientType(adaptiveEngine.getAmbientType());
       setAmbientVolume(adaptiveEngine.getAmbientVolume());
+      setSpatial8D(adaptiveEngine.getSpatial8DState());
     });
   }, []);
 
@@ -528,7 +530,7 @@ export function App() {
               />
             </div>
 
-            {/* Bàn Mini-Mixer 4 Kênh & Tầng Âm Thanh Bí Mật (Binaural Beats / Brown Noise) */}
+            {/* Bàn Mini-Mixer 4 Kênh & Tầng Âm Thanh Bí Mật (Binaural Beats / Brown Noise) & Không Gian Âm Thanh 8D */}
             <ActiveStemMixer
               hasStems={Boolean(currentTrack?.has_stems)}
               mixerMode={mixerMode}
@@ -536,6 +538,7 @@ export function App() {
               energyLevel={activity.energy_level}
               ambientType={ambientType}
               ambientVolume={ambientVolume}
+              spatial8D={spatial8D}
               onSetMixerMode={(mode) => adaptiveEngine.setMixerMode(mode)}
               onSetVolume={(stem, vol) => adaptiveEngine.setStemVolume(stem, vol)}
               onToggleMute={(stem) => adaptiveEngine.toggleMute(stem)}
@@ -543,6 +546,9 @@ export function App() {
               onApplyPreset={(preset) => adaptiveEngine.applyPreset(preset)}
               onSetAmbientType={(type) => adaptiveEngine.setAmbientType(type)}
               onSetAmbientVolume={(vol) => adaptiveEngine.setAmbientVolume(vol)}
+              onSetSpatial8DEnabled={(enabled) => adaptiveEngine.setSpatial8DEnabled(enabled)}
+              onSetSpatial8DSpeed={(speed) => adaptiveEngine.setSpatial8DSpeed(speed)}
+              onSetSpatial8DVocalMode={(mode) => adaptiveEngine.setSpatial8DVocalMode(mode)}
             />
           </div>
 
