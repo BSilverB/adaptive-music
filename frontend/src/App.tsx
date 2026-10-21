@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Play,
   Pause,
@@ -11,12 +11,16 @@ import {
   Shuffle,
   Repeat,
   Repeat1,
+  Disc,
 } from "lucide-react";
 import { GeekHUD } from "./components/GeekHUD";
 import { FlowMeter } from "./components/FlowMeter";
 import { ActiveStemMixer } from "./components/ActiveStemMixer";
 import { PlaylistView } from "./components/PlaylistView";
+import { DevWrappedModal } from "./components/DevWrappedModal";
 import { useDesktopSocket } from "./hooks/useDesktopSocket";
+import { useMeetingDucking } from "./hooks/useMeetingDucking";
+import { useFlowAnalytics } from "./hooks/useFlowAnalytics";
 import { adaptiveEngine } from "./audio/AdaptiveEngine";
 import type { TrackMeta, Playlist, AmbientType } from "./audio/AdaptiveEngine";
 
@@ -46,6 +50,29 @@ export function App() {
   const [stemState, setStemState] = useState(adaptiveEngine.getStemState());
   const [ambientType, setAmbientType] = useState<AmbientType>(adaptiveEngine.getAmbientType());
   const [ambientVolume, setAmbientVolume] = useState<number>(adaptiveEngine.getAmbientVolume());
+  const [djCrossfade, setDjCrossfade] = useState<boolean>(adaptiveEngine.getDJCrossfadeEnabled());
+  const [isTransitioning, setIsTransitioning] = useState<boolean>(false);
+  const [isDevWrappedOpen, setIsDevWrappedOpen] = useState<boolean>(false);
+
+  // Hook Meeting / Call Auto-Ducking
+  const {
+    isEnabled: micDuckingEnabled,
+    isSpeaking,
+    speechLevel,
+    toggleMicDucking,
+  } = useMeetingDucking();
+
+  // Hook Dev-Wrapped & Flow State Analytics
+  const {
+    todayStats,
+    allStats,
+    topTracks,
+    flowRatio,
+    resetTodayStats,
+  } = useFlowAnalytics(isPlaying, currentTrack, activity);
+
+  const isTransitioningRef = useRef<boolean>(false);
+  const preloadedTrackIdRef = useRef<string | null>(null);
 
   // Shuffle & Repeat states
   const [isShuffle, setIsShuffle] = useState<boolean>(false);
@@ -97,32 +124,6 @@ export function App() {
     fetchTracks();
     fetchPlaylists();
   }, [fetchTracks, fetchPlaylists, tracksCount]);
-
-  // Cập nhật mốc thời gian phát bài hát
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (isPlaying) {
-        setCurrentTime(adaptiveEngine.getCurrentTime());
-      }
-    }, 250);
-    return () => clearInterval(timer);
-  }, [isPlaying]);
-
-  // Lắng nghe phím tắt toàn cục (Ctrl + Shift + D hoặc Ctrl + Alt + Space)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const isBurstKey =
-        (e.ctrlKey && e.altKey && e.code === "Space") ||
-        (e.ctrlKey && e.shiftKey && (e.key === "D" || e.key === "d"));
-
-      if (isBurstKey) {
-        e.preventDefault();
-        triggerBurst(15);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [triggerBurst]);
 
   // Playlist hiện tại đang active
   const currentPlaylist = useMemo(() => {
@@ -191,6 +192,9 @@ export function App() {
 
   const handlePlayTrack = async (track: TrackMeta) => {
     if (!engineReady) handleInitializeEngine();
+    isTransitioningRef.current = false;
+    setIsTransitioning(false);
+    preloadedTrackIdRef.current = null;
     setCurrentTrack(track);
     setIsPlaying(true);
     await adaptiveEngine.playTrack(track, 0);
@@ -208,7 +212,7 @@ export function App() {
 
   // Chuyển sang bài tiếp theo (Next)
   const playNextTrack = useCallback(
-    (autoTriggered = false) => {
+    async (autoTriggered = false, isDJCrossfade = false) => {
       const queueList = isShuffle ? shuffledTrackIds : currentPlaylist.track_ids;
       if (queueList.length === 0) return;
 
@@ -236,7 +240,19 @@ export function App() {
       const nextId = queueList[nextIdx];
       const nextTrack = tracksMap.get(nextId);
       if (nextTrack) {
-        handlePlayTrack(nextTrack);
+        if (isDJCrossfade) {
+          isTransitioningRef.current = true;
+          setIsTransitioning(true);
+          setCurrentTrack(nextTrack);
+          setIsPlaying(true);
+          await adaptiveEngine.playWithDJCrossfade(nextTrack);
+          setTimeout(() => {
+            isTransitioningRef.current = false;
+            setIsTransitioning(false);
+          }, 8000);
+        } else {
+          handlePlayTrack(nextTrack);
+        }
       }
     },
     [
@@ -273,6 +289,75 @@ export function App() {
       playNextTrack(true);
     });
   }, [playNextTrack]);
+
+  // Cập nhật mốc thời gian phát bài hát & tự động kích hoạt DJ Smart Crossfade
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!isPlaying) return;
+      const cur = adaptiveEngine.getCurrentTime();
+      setCurrentTime(cur);
+
+      if (!currentTrack || currentTrack.duration < 20) return;
+
+      const queueList = isShuffle ? shuffledTrackIds : currentPlaylist.track_ids;
+      if (queueList.length <= 1) return;
+
+      const currentIdx = queueList.indexOf(currentTrack.id);
+      let nextIdx = currentIdx + 1;
+      if (nextIdx >= queueList.length) {
+        if (repeatMode === "all") nextIdx = 0;
+        else return;
+      }
+      const nextTrack = tracksMap.get(queueList[nextIdx]);
+      if (!nextTrack) return;
+
+      const remaining = currentTrack.duration - cur;
+
+      // 1. Tải trước (Preload) bài tiếp theo khi còn 15 giây
+      if (remaining <= 15.0 && preloadedTrackIdRef.current !== nextTrack.id) {
+        preloadedTrackIdRef.current = nextTrack.id;
+        adaptiveEngine.preloadTrack(nextTrack);
+      }
+
+      // 2. Kích hoạt DJ Crossfade hòa nhịp khi còn 8.5 giây
+      if (
+        remaining <= 8.5 &&
+        !isTransitioningRef.current &&
+        djCrossfade &&
+        repeatMode !== "one"
+      ) {
+        playNextTrack(true, true);
+      }
+    }, 250);
+
+    return () => clearInterval(timer);
+  }, [
+    isPlaying,
+    currentTrack,
+    currentPlaylist.track_ids,
+    isShuffle,
+    shuffledTrackIds,
+    repeatMode,
+    djCrossfade,
+    tracksMap,
+    playNextTrack,
+  ]);
+
+  // Lắng nghe phím tắt toàn cục (Ctrl + Shift + D hoặc Ctrl + Alt + Space)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isBurstKey =
+        (e.ctrlKey && e.altKey && e.code === "Space") ||
+        (e.ctrlKey && e.shiftKey && (e.key === "D" || e.key === "d"));
+
+      if (isBurstKey) {
+        e.preventDefault();
+        triggerBurst(15);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [triggerBurst]);
 
   // Playlists Operations
   const handleSelectPlaylist = async (playlistId: string) => {
@@ -405,6 +490,12 @@ export function App() {
         system={system}
         queue={queue}
         idleSeconds={activity.idle_seconds}
+        micDuckingEnabled={micDuckingEnabled}
+        isSpeaking={isSpeaking}
+        speechLevel={speechLevel}
+        flowRatio={flowRatio}
+        onToggleMicDucking={toggleMicDucking}
+        onOpenDevWrapped={() => setIsDevWrappedOpen(true)}
       />
 
       {/* 2. Banner Vượt rào Autoplay Policy (Nếu chưa click) */}
@@ -506,9 +597,16 @@ export function App() {
                   <Volume2 className="h-5 w-5 animate-pulse" />
                 </div>
                 <div className="min-w-0">
-                  <p className="truncate text-xs font-semibold text-slate-100">
-                    {currentTrack.title}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className="truncate text-xs font-semibold text-slate-100">
+                      {currentTrack.title}
+                    </p>
+                    {isTransitioning && (
+                      <span className="shrink-0 animate-pulse rounded bg-purple-900/80 border border-purple-500/60 px-1.5 py-0.5 text-[9px] font-mono font-bold text-purple-200 shadow-[0_0_12px_rgba(168,85,247,0.7)]">
+                        🎧 DJ CROSSFADE
+                      </span>
+                    )}
+                  </div>
                   <p className="text-[10px] text-cyan-400">
                     {currentTrack.has_stems
                       ? `4 Stems Studio (${mixerMode === "auto" ? "Tự động" : "Bàn trộn"}) • ${currentPlaylist.name}`
@@ -611,6 +709,28 @@ export function App() {
                       <Repeat className="h-3.5 w-3.5" />
                     )}
                   </button>
+
+                  {/* DJ Smart Crossfade Mini Toggle */}
+                  <button
+                    onClick={() => {
+                      const next = !djCrossfade;
+                      setDjCrossfade(next);
+                      adaptiveEngine.setDJCrossfadeEnabled(next);
+                    }}
+                    className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono transition-all ${
+                      djCrossfade
+                        ? "border border-purple-500/50 bg-purple-950/70 text-purple-300 shadow-[0_0_8px_rgba(168,85,247,0.4)]"
+                        : "border border-transparent text-slate-500 hover:text-slate-300"
+                    }`}
+                    title={
+                      djCrossfade
+                        ? "DJ Smart Crossfade: BẬT (Tự động gối đầu 8.5s cuối bài mượt mà)"
+                        : "DJ Smart Crossfade: TẮT"
+                    }
+                  >
+                    <Disc className="h-3 w-3 text-purple-400" />
+                    <span>DJ</span>
+                  </button>
                 </div>
 
                 <div className="flex w-full items-center gap-2 text-[10px] font-mono text-slate-400">
@@ -637,6 +757,16 @@ export function App() {
             </div>
           </div>
         )}
+        {/* 5. Modal Báo Cáo Năng Suất Dev-Wrapped */}
+        <DevWrappedModal
+          isOpen={isDevWrappedOpen}
+          onClose={() => setIsDevWrappedOpen(false)}
+          todayStats={todayStats}
+          allStats={allStats}
+          topTracks={topTracks}
+          flowRatio={flowRatio}
+          onResetToday={resetTodayStats}
+        />
       </main>
     </div>
   );

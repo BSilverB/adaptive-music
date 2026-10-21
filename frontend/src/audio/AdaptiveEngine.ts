@@ -127,6 +127,16 @@ export class AdaptiveEngine {
   private brownNoiseSource: AudioBufferSourceNode | null = null;
   private brownNoiseFilter: BiquadFilterNode | null = null;
 
+  // Meeting / Call Auto-Ducking Node
+  private duckingGain: GainNode | null = null;
+  private isDucked: boolean = false;
+
+  // DJ Smart Transition Crossfade
+  private djCrossfadeEnabled: boolean = true;
+  private preloadedTrackId: string | null = null;
+  private preloadedBuffers: Record<StemType, AudioBuffer | null> | null = null;
+  private preloadedOriginalBuffer: AudioBuffer | null = null;
+
   // Real-time 4-Stem Analyser Nodes for Cyberpunk Visualizer
   private stemAnalysers: Record<StemType, AnalyserNode | null> = {
     vocals: null,
@@ -176,6 +186,10 @@ export class AdaptiveEngine {
           this.ambientVolume = Math.max(0.0, Math.min(0.20, parsedVol));
         }
       }
+      const savedDJCrossfade = localStorage.getItem("adaptive_dj_crossfade");
+      if (savedDJCrossfade !== null) {
+        this.djCrossfadeEnabled = savedDJCrossfade === "true";
+      }
     } catch {
       // ignore
     }
@@ -187,6 +201,7 @@ export class AdaptiveEngine {
       localStorage.setItem("adaptive_stem_mixer_mode", this.mixerMode);
       localStorage.setItem("adaptive_ambient_type", this.ambientType);
       localStorage.setItem("adaptive_ambient_volume", this.ambientVolume.toString());
+      localStorage.setItem("adaptive_dj_crossfade", this.djCrossfadeEnabled.toString());
     } catch {
       // ignore
     }
@@ -350,7 +365,7 @@ export class AdaptiveEngine {
     if (!this.ambientGain) {
       this.ambientGain = this.audioCtx.createGain();
       this.ambientGain.gain.setValueAtTime(0.0, now);
-      this.ambientGain.connect(this.audioCtx.destination);
+      this.ambientGain.connect(this.duckingGain || this.audioCtx.destination);
     }
 
     if (this.ambientType === "off" || (!this.isPlaying && !this.isPaused)) {
@@ -478,7 +493,163 @@ export class AdaptiveEngine {
     if (this.audioCtx.state === "suspended") {
       this.audioCtx.resume();
     }
+    if (!this.duckingGain) {
+      this.duckingGain = this.audioCtx.createGain();
+      this.duckingGain.gain.setValueAtTime(this.isDucked ? 0.10 : 1.0, this.audioCtx.currentTime);
+      this.duckingGain.connect(this.audioCtx.destination);
+    }
     return this.audioCtx;
+  }
+
+  // --- MEETING / CALL AUTO-DUCKING CONTROLS ---
+  public setDucking(ducked: boolean): void {
+    this.isDucked = ducked;
+    if (!this.audioCtx) return;
+    this.initContext();
+    if (!this.duckingGain) return;
+    const now = this.audioCtx.currentTime;
+    this.duckingGain.gain.cancelScheduledValues(now);
+    if (ducked) {
+      this.duckingGain.gain.linearRampToValueAtTime(0.10, now + 0.3);
+    } else {
+      this.duckingGain.gain.linearRampToValueAtTime(1.0, now + 1.2);
+    }
+    this.notifyListeners();
+  }
+
+  public getIsDucked(): boolean {
+    return this.isDucked;
+  }
+
+  // --- SMART DJ BEAT-MATCHED CROSSFADE CONTROLS ---
+  public setDJCrossfadeEnabled(enabled: boolean): void {
+    this.djCrossfadeEnabled = enabled;
+    this.persistMixerState();
+    this.notifyListeners();
+  }
+
+  public getDJCrossfadeEnabled(): boolean {
+    return this.djCrossfadeEnabled;
+  }
+
+  public async preloadTrack(track: TrackMeta): Promise<void> {
+    if (this.currentTrackId === track.id || this.preloadedTrackId === track.id) return;
+    try {
+      this.initContext();
+      if (track.has_stems) {
+        const [vocals, other, bass, drums] = await Promise.all([
+          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${track.id}/audio/vocals`),
+          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${track.id}/audio/other`),
+          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${track.id}/audio/bass`),
+          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${track.id}/audio/drums`),
+        ]);
+        this.preloadedBuffers = { vocals, other, bass, drums };
+        this.preloadedOriginalBuffer = null;
+      } else {
+        this.preloadedOriginalBuffer = await this.fetchAndDecode(
+          `http://127.0.0.1:8000/api/tracks/${track.id}/audio/original`
+        );
+        this.preloadedBuffers = null;
+      }
+      this.preloadedTrackId = track.id;
+    } catch {
+      // Bỏ qua lỗi preload nếu có, fallback tải trực tiếp
+    }
+  }
+
+  public async playWithDJCrossfade(nextTrack: TrackMeta): Promise<void> {
+    if (!this.audioCtx || !this.isPlaying || !this.currentTrack) {
+      await this.playTrack(nextTrack, 0);
+      return;
+    }
+
+    const now = this.audioCtx.currentTime;
+    const crossfadeDuration = 7.5; // 7.5 giây chuyển bài studio
+
+    // 1. Áp dụng hiệu ứng Lowpass Filter quét mờ & Fade-out bài cũ (Outro)
+    if (this.rhythmFilter) {
+      this.rhythmFilter.frequency.cancelScheduledValues(now);
+      this.rhythmFilter.frequency.exponentialRampToValueAtTime(250, now + crossfadeDuration);
+    }
+    if (this.masterGain) {
+      this.masterGain.gain.cancelScheduledValues(now);
+      this.masterGain.gain.linearRampToValueAtTime(0.0, now + crossfadeDuration);
+    }
+
+    // Lưu lại old references để ngắt kết nối an toàn sau khi outro hoàn tất
+    const oldSources = { ...this.sources };
+    const oldOrig = this.origSource;
+    const oldMaster = this.masterGain;
+    const oldFilter = this.rhythmFilter;
+
+    // 2. Chuẩn bị buffers bài mới
+    let nextBuffers: Record<StemType, AudioBuffer | null> | null = null;
+    let nextOrigBuffer: AudioBuffer | null = null;
+
+    if (this.preloadedTrackId === nextTrack.id) {
+      nextBuffers = this.preloadedBuffers;
+      nextOrigBuffer = this.preloadedOriginalBuffer;
+      this.preloadedTrackId = null;
+      this.preloadedBuffers = null;
+      this.preloadedOriginalBuffer = null;
+    }
+
+    if (nextTrack.has_stems) {
+      if (!nextBuffers || !nextBuffers.vocals || !nextBuffers.other || !nextBuffers.bass || !nextBuffers.drums) {
+        const [vocals, other, bass, drums] = await Promise.all([
+          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${nextTrack.id}/audio/vocals`),
+          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${nextTrack.id}/audio/other`),
+          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${nextTrack.id}/audio/bass`),
+          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${nextTrack.id}/audio/drums`),
+        ]);
+        nextBuffers = { vocals, other, bass, drums };
+      }
+      this.buffers = nextBuffers;
+    } else {
+      if (!nextOrigBuffer) {
+        nextOrigBuffer = await this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${nextTrack.id}/audio/original`);
+      }
+      this.originalBuffer = nextOrigBuffer;
+    }
+
+    this.currentTrack = nextTrack;
+    this.currentTrackId = nextTrack.id;
+    this.pausedAtOffset = 0;
+
+    // 3. Khởi chạy bài mới gối đầu với Fade-in mượt mà
+    if (nextTrack.has_stems) {
+      this.startStemsPlayback(0);
+      if (this.masterGain) {
+        this.masterGain.gain.setValueAtTime(0.0, this.audioCtx.currentTime);
+        this.masterGain.gain.linearRampToValueAtTime(1.0, this.audioCtx.currentTime + 2.0);
+      }
+    } else {
+      this.startFallbackPlayback(0);
+      if (this.masterGain) {
+        this.masterGain.gain.setValueAtTime(0.0, this.audioCtx.currentTime);
+        this.masterGain.gain.linearRampToValueAtTime(1.0, this.audioCtx.currentTime + 2.0);
+      }
+    }
+
+    // 4. Giải phóng tài nguyên bài cũ sau khi outro tắt hẳn
+    setTimeout(() => {
+      try {
+        oldSources.vocals?.stop();
+        oldSources.other?.stop();
+        oldSources.bass?.stop();
+        oldSources.drums?.stop();
+        oldOrig?.stop();
+      } catch { /* ignore */ }
+      oldSources.vocals?.disconnect();
+      oldSources.other?.disconnect();
+      oldSources.bass?.disconnect();
+      oldSources.drums?.disconnect();
+      oldOrig?.disconnect();
+      oldMaster?.disconnect();
+      oldFilter?.disconnect();
+    }, crossfadeDuration * 1000 + 100);
+
+    this.notifyListeners();
   }
 
   public getContextState(): string {
@@ -502,10 +673,18 @@ export class AdaptiveEngine {
     this.currentTrack = track;
     this.pausedAtOffset = offsetSec;
 
-    // Giải phóng buffer cũ nếu đổi bài
+    // Giải phóng buffer cũ hoặc tái sử dụng từ preload
     if (this.currentTrackId !== track.id) {
-      this.buffers = { vocals: null, other: null, bass: null, drums: null };
-      this.originalBuffer = null;
+      if (this.preloadedTrackId === track.id) {
+        this.buffers = this.preloadedBuffers || { vocals: null, other: null, bass: null, drums: null };
+        this.originalBuffer = this.preloadedOriginalBuffer;
+        this.preloadedTrackId = null;
+        this.preloadedBuffers = null;
+        this.preloadedOriginalBuffer = null;
+      } else {
+        this.buffers = { vocals: null, other: null, bass: null, drums: null };
+        this.originalBuffer = null;
+      }
       this.currentTrackId = track.id;
     }
 
@@ -565,7 +744,7 @@ export class AdaptiveEngine {
     this.masterAnalyser.fftSize = 64;
     this.masterAnalyser.smoothingTimeConstant = 0.8;
     this.masterGain.connect(this.masterAnalyser);
-    this.masterAnalyser.connect(this.audioCtx.destination);
+    this.masterAnalyser.connect(this.duckingGain || this.audioCtx.destination);
 
     // Dynamic Filter cho Drums & Bass
     this.rhythmFilter = this.audioCtx.createBiquadFilter();
@@ -635,7 +814,7 @@ export class AdaptiveEngine {
     this.masterAnalyser.fftSize = 64;
     this.masterAnalyser.smoothingTimeConstant = 0.8;
     this.masterGain.connect(this.masterAnalyser);
-    this.masterAnalyser.connect(this.audioCtx.destination);
+    this.masterAnalyser.connect(this.duckingGain || this.audioCtx.destination);
 
     this.origSource = this.audioCtx.createBufferSource();
     this.origSource.buffer = this.originalBuffer;
@@ -836,6 +1015,8 @@ export class AdaptiveEngine {
       stemState: this.getStemState(),
       ambientType: this.ambientType,
       ambientVolume: this.ambientVolume,
+      isDucked: this.isDucked,
+      djCrossfadeEnabled: this.djCrossfadeEnabled,
     };
   }
 }
