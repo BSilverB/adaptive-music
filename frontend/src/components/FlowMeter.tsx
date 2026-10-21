@@ -22,8 +22,14 @@ export const FlowMeter: React.FC<FlowMeterProps> = ({
     (activity.burst_remaining_seconds !== undefined && activity.burst_remaining_seconds > 0);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const activityRef = useRef(activity);
 
-  // 4-Stem Cyberpunk Reactive Visualizer Canvas Loop
+  // Luôn cập nhật ref để canvas loop đọc dữ liệu mới nhất mà KHÔNG cần restart loop
+  useEffect(() => {
+    activityRef.current = activity;
+  }, [activity]);
+
+  // 4-Stem Cyberpunk Reactive Visualizer Canvas Loop (Chạy 1 lần duy nhất, siêu mượt 60fps)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -32,6 +38,12 @@ export const FlowMeter: React.FC<FlowMeterProps> = ({
 
     let animId: number;
     let scanAngle = 0;
+
+    // Bộ đệm làm mượt LERP (Linear Interpolation) - Triệt tiêu hoàn toàn hiện tượng giật giật
+    let smoothDrums = 0;
+    let smoothBass = 0;
+    let smoothMelody = 0;
+    let smoothVocals = 0;
 
     const render = () => {
       animId = requestAnimationFrame(render);
@@ -43,44 +55,46 @@ export const FlowMeter: React.FC<FlowMeterProps> = ({
 
       ctx.clearRect(0, 0, width, height);
 
+      const act = activityRef.current;
+      const curEnergy = act.energy_level;
       const visData = adaptiveEngine.getVisualizerData();
       const isPlaying = visData.isPlaying;
 
-      const drums = visData.stems.drums;
-      const bass = visData.stems.bass;
-      const melody = visData.stems.other;
-      const vocals = visData.stems.vocals;
+      // Nội suy mượt mà (LERP) chuyển động dải tần
+      smoothDrums += (visData.stems.drums - smoothDrums) * 0.12;
+      smoothBass += (visData.stems.bass - smoothBass) * 0.10;
+      smoothMelody += (visData.stems.other - smoothMelody) * 0.10;
+      smoothVocals += (visData.stems.vocals - smoothVocals) * 0.10;
 
-      // 1. Kinetic Typist / Interaction Glow Aura (hào quang nhấp nháy khi gõ phím)
-      const isTypingActive = activity.idle_seconds < 2.0;
+      // 1. Kinetic Aura (Hào quang gõ phím dịu mắt, không nhấp nháy chói)
+      const isTypingActive = act.idle_seconds < 2.0;
       if (isTypingActive) {
         ctx.save();
         ctx.beginPath();
         ctx.arc(cx, cy, 142, 0, Math.PI * 2);
-        ctx.strokeStyle = energy > 0.6 ? "rgba(244, 63, 94, 0.45)" : "rgba(6, 182, 212, 0.35)";
-        ctx.lineWidth = 4 + Math.sin(Date.now() / 80) * 2;
-        ctx.shadowBlur = 18;
-        ctx.shadowColor = energy > 0.6 ? "#f43f5e" : "#06b6d4";
+        ctx.strokeStyle = curEnergy > 0.6 ? "rgba(244, 63, 94, 0.35)" : "rgba(6, 182, 212, 0.28)";
+        ctx.lineWidth = 2.5;
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = curEnergy > 0.6 ? "#f43f5e" : "#06b6d4";
         ctx.stroke();
         ctx.restore();
       }
 
-      // 2. Idle Radar Scanning Sweep (khi nhạc tắt hoặc âm trầm nhẹ)
-      scanAngle += 0.025;
+      // 2. Idle Radar Scanning Sweep (Quét êm dịu khi nhạc tắt)
+      scanAngle += 0.02;
       ctx.save();
       ctx.beginPath();
       ctx.arc(cx, cy, 134, 0, Math.PI * 2);
-      ctx.strokeStyle = "rgba(51, 65, 85, 0.3)";
+      ctx.strokeStyle = "rgba(51, 65, 85, 0.25)";
       ctx.lineWidth = 1;
       ctx.stroke();
 
       if (!isPlaying) {
-        // Radar sweep
         const sweepX = cx + Math.cos(scanAngle) * 134;
         const sweepY = cy + Math.sin(scanAngle) * 134;
         const grad = ctx.createLinearGradient(cx, cy, sweepX, sweepY);
         grad.addColorStop(0, "rgba(6, 182, 212, 0)");
-        grad.addColorStop(1, "rgba(6, 182, 212, 0.25)");
+        grad.addColorStop(1, "rgba(6, 182, 212, 0.2)");
         ctx.beginPath();
         ctx.moveTo(cx, cy);
         ctx.arc(cx, cy, 134, scanAngle - 0.4, scanAngle);
@@ -92,14 +106,16 @@ export const FlowMeter: React.FC<FlowMeterProps> = ({
       }
       ctx.restore();
 
-      // 3. STEM 1: BASS RING (Tím / Hổ phách trầm - Uốn lượn nhịp nhàng)
+      const time = performance.now();
+
+      // 3. STEM 1: BASS RING (Tím / Hổ phách - Sóng trầm uốn lượn mượt mà)
       ctx.save();
-      const bassRadius = 118 + bass * 8;
+      const bassRadius = 118 + smoothBass * 5;
       ctx.beginPath();
-      const bassSegments = 36;
+      const bassSegments = 32;
       for (let i = 0; i <= bassSegments; i++) {
         const theta = (i / bassSegments) * Math.PI * 2;
-        const wave = Math.sin(theta * 6 + Date.now() / 200) * (bass * 7);
+        const wave = Math.sin(theta * 4 + time * 0.002) * (smoothBass * 4.5);
         const r = bassRadius + wave;
         const x = cx + Math.cos(theta) * r;
         const y = cy + Math.sin(theta) * r;
@@ -107,21 +123,21 @@ export const FlowMeter: React.FC<FlowMeterProps> = ({
         else ctx.lineTo(x, y);
       }
       ctx.closePath();
-      ctx.strokeStyle = `rgba(245, 158, 11, ${0.4 + bass * 0.5})`;
-      ctx.lineWidth = 2.5 + bass * 3;
-      ctx.shadowBlur = 12 * bass;
+      ctx.strokeStyle = `rgba(245, 158, 11, ${0.35 + smoothBass * 0.45})`;
+      ctx.lineWidth = 2 + smoothBass * 1.5;
+      ctx.shadowBlur = 6;
       ctx.shadowColor = "#f59e0b";
       ctx.stroke();
       ctx.restore();
 
-      // 4. STEM 2: MELODY RING (Xanh lục ngọc Emerald - Dải trung mượt mà)
+      // 4. STEM 2: MELODY RING (Xanh lục ngọc Emerald - Dải trung thanh thoát)
       ctx.save();
-      const melodyRadius = 126 + melody * 6;
+      const melodyRadius = 125 + smoothMelody * 4;
       ctx.beginPath();
-      const melodySegments = 48;
+      const melodySegments = 36;
       for (let i = 0; i <= melodySegments; i++) {
         const theta = (i / melodySegments) * Math.PI * 2;
-        const wave = Math.cos(theta * 8 - Date.now() / 150) * (melody * 6);
+        const wave = Math.cos(theta * 6 - time * 0.0025) * (smoothMelody * 4);
         const r = melodyRadius + wave;
         const x = cx + Math.cos(theta) * r;
         const y = cy + Math.sin(theta) * r;
@@ -129,21 +145,21 @@ export const FlowMeter: React.FC<FlowMeterProps> = ({
         else ctx.lineTo(x, y);
       }
       ctx.closePath();
-      ctx.strokeStyle = `rgba(16, 185, 129, ${0.4 + melody * 0.5})`;
-      ctx.lineWidth = 2 + melody * 2.5;
-      ctx.shadowBlur = 10 * melody;
+      ctx.strokeStyle = `rgba(16, 185, 129, ${0.35 + smoothMelody * 0.45})`;
+      ctx.lineWidth = 1.8 + smoothMelody * 1.5;
+      ctx.shadowBlur = 6;
       ctx.shadowColor = "#10b981";
       ctx.stroke();
       ctx.restore();
 
       // 5. STEM 3: VOCALS RING (Cyan Electric - Dải cao trong trẻo)
       ctx.save();
-      const vocalsRadius = 133 + vocals * 5;
+      const vocalsRadius = 131 + smoothVocals * 3.5;
       ctx.beginPath();
-      const vocalSegments = 32;
+      const vocalSegments = 30;
       for (let i = 0; i <= vocalSegments; i++) {
         const theta = (i / vocalSegments) * Math.PI * 2;
-        const wave = Math.sin(theta * 10 + Date.now() / 120) * (vocals * 5);
+        const wave = Math.sin(theta * 8 + time * 0.003) * (smoothVocals * 3);
         const r = vocalsRadius + wave;
         const x = cx + Math.cos(theta) * r;
         const y = cy + Math.sin(theta) * r;
@@ -151,26 +167,25 @@ export const FlowMeter: React.FC<FlowMeterProps> = ({
         else ctx.lineTo(x, y);
       }
       ctx.closePath();
-      ctx.strokeStyle = `rgba(6, 182, 212, ${0.35 + vocals * 0.55})`;
-      ctx.lineWidth = 1.5 + vocals * 2;
-      ctx.shadowBlur = 10 * vocals;
+      ctx.strokeStyle = `rgba(6, 182, 212, ${0.3 + smoothVocals * 0.45})`;
+      ctx.lineWidth = 1.5 + smoothVocals * 1.2;
+      ctx.shadowBlur = 5;
       ctx.shadowColor = "#06b6d4";
       ctx.stroke();
       ctx.restore();
 
-      // 6. STEM 4: DRUMS SPIKES (Đỏ Neon - Đập bùng nổ theo Kick/Snare)
+      // 6. STEM 4: DRUMS SPIKES (Đỏ Neon - Đập nhịp nhàng, có độ hãm êm)
       ctx.save();
       const drumSpikes = 24;
-      const baseDrumsRadius = 138;
-      ctx.strokeStyle = `rgba(244, 63, 94, ${0.4 + drums * 0.6})`;
-      ctx.fillStyle = `rgba(244, 63, 94, ${0.4 + drums * 0.6})`;
-      ctx.lineWidth = 2;
-      ctx.shadowBlur = 15 * drums;
+      const baseDrumsRadius = 136;
+      ctx.strokeStyle = `rgba(244, 63, 94, ${0.35 + smoothDrums * 0.55})`;
+      ctx.lineWidth = 1.8;
+      ctx.shadowBlur = 6;
       ctx.shadowColor = "#f43f5e";
 
       for (let i = 0; i < drumSpikes; i++) {
         const theta = (i / drumSpikes) * Math.PI * 2;
-        const spikeLen = Math.max(2, drums * 18);
+        const spikeLen = Math.max(2, smoothDrums * 12);
         const x1 = cx + Math.cos(theta) * baseDrumsRadius;
         const y1 = cy + Math.sin(theta) * baseDrumsRadius;
         const x2 = cx + Math.cos(theta) * (baseDrumsRadius + spikeLen);
@@ -186,11 +201,11 @@ export const FlowMeter: React.FC<FlowMeterProps> = ({
 
     animId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animId);
-  }, [activity.idle_seconds, energy]);
+  }, []);
 
-  // Xác định màu sắc chủ đạo theo 3 cấp độ
+  // Xác định màu sắc chủ đạo theo 3 cấp độ (Cố định, chuyển màu êm ái)
   let colorTheme = {
-    ring: "border-emerald-500 shadow-[0_0_35px_rgba(16,185,129,0.35)]",
+    ring: "border-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.3)]",
     text: "text-emerald-400",
     bgBadge: "bg-emerald-950/60 border-emerald-500/40 text-emerald-300",
     label: "DEEP FOCUS",
@@ -199,7 +214,7 @@ export const FlowMeter: React.FC<FlowMeterProps> = ({
 
   if (energy > 0.6) {
     colorTheme = {
-      ring: "border-rose-500 shadow-[0_0_50px_rgba(239,68,68,0.5)] animate-pulse",
+      ring: "border-rose-500 shadow-[0_0_40px_rgba(239,68,68,0.45)]",
       text: "text-rose-400",
       bgBadge: "bg-rose-950/60 border-rose-500/40 text-rose-300",
       label: activity.state === "BREAK_TIME" ? "MICRO-BREAK DROP" : "FULL OVERDRIVE",
@@ -207,7 +222,7 @@ export const FlowMeter: React.FC<FlowMeterProps> = ({
     };
   } else if (energy > 0.15) {
     colorTheme = {
-      ring: "border-amber-500 shadow-[0_0_40px_rgba(245,158,11,0.4)]",
+      ring: "border-amber-500 shadow-[0_0_35px_rgba(245,158,11,0.35)]",
       text: "text-amber-400",
       bgBadge: "bg-amber-950/60 border-amber-500/40 text-amber-300",
       label: "FATIGUE NUDGE",
@@ -219,13 +234,13 @@ export const FlowMeter: React.FC<FlowMeterProps> = ({
   const burstRemaining = activity.burst_remaining_seconds ?? 0;
 
   return (
-    <div className="flex flex-col items-center justify-center p-4 text-center">
+    <div className="flex flex-col items-center justify-center p-4 text-center select-none">
       {/* Trạng thái Badge */}
       <div
-        className={`mb-4 inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-semibold tracking-widest uppercase transition-all duration-700 ${colorTheme.bgBadge}`}
+        className={`mb-4 inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-semibold tracking-widest uppercase transition-colors duration-500 ${colorTheme.bgBadge}`}
       >
         {energy > 0.6 ? (
-          <Flame className="h-4 w-4 animate-bounce text-rose-400" />
+          <Flame className="h-4 w-4 text-rose-400" />
         ) : energy > 0.15 ? (
           <Zap className="h-4 w-4 text-amber-400" />
         ) : (
@@ -236,7 +251,7 @@ export const FlowMeter: React.FC<FlowMeterProps> = ({
 
       {/* Vòng tròn Cyberpunk Glow Meter tích hợp Canvas Visualizer 4-Stem */}
       <div className="relative flex h-[310px] w-[310px] items-center justify-center">
-        {/* Canvas Visualizer phản ứng 4 dải âm thanh và nhịp gõ phím */}
+        {/* Canvas Visualizer phản ứng 4 dải âm thanh siêu mượt */}
         <canvas
           ref={canvasRef}
           width={310}
@@ -244,9 +259,9 @@ export const FlowMeter: React.FC<FlowMeterProps> = ({
           className="absolute inset-0 z-0 pointer-events-none"
         />
 
-        {/* Glow ngoài */}
+        {/* Glow ngoài - Khóa kích thước tĩnh, chỉ chuyển màu mượt mà */}
         <div
-          className={`relative z-10 flex h-52 w-52 items-center justify-center rounded-full border-4 bg-slate-950/95 backdrop-blur-md transition-all duration-700 ${colorTheme.ring}`}
+          className={`relative z-10 flex h-52 w-52 items-center justify-center rounded-full border-4 bg-slate-950/95 backdrop-blur-md transition-[border-color,box-shadow] duration-500 ${colorTheme.ring}`}
         >
           {/* Inner dashed ring */}
           <div className="absolute inset-2.5 rounded-full border border-dashed border-slate-700/60" />
