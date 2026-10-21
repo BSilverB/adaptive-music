@@ -515,7 +515,7 @@ export function App() {
       )}
 
       {/* 3. Thân ứng dụng chính */}
-      <main className="mx-auto max-w-7xl px-4 py-6">
+      <main className={`mx-auto max-w-7xl px-4 py-6 transition-all duration-300 ${currentTrack ? "pb-40" : "pb-12"}`}>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
           {/* Cột Trái / Trung tâm: FlowMeter + ActiveStemMixer */}
           <div className="lg:col-span-7 flex flex-col gap-4">
@@ -589,7 +589,7 @@ export function App() {
 
         {/* 4. Thanh phát nhạc cố định dưới đáy */}
         {currentTrack && (
-          <div className="fixed bottom-0 left-0 right-0 border-t border-cyan-900/40 bg-slate-950/90 p-3 backdrop-blur-xl">
+          <div className="fixed bottom-0 left-0 right-0 border-t border-cyan-900/40 bg-slate-950/95 p-3 backdrop-blur-xl z-30 shadow-[0_-10px_30px_rgba(0,0,0,0.6)]">
             <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
               {/* Thông tin bài đang phát */}
               <div className="flex items-center gap-3 min-w-[200px] flex-1">
