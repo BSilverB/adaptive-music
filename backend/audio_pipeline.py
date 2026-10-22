@@ -215,6 +215,25 @@ class AudioPipeline:
             except Exception:
                 pass
 
+        # Dọn dẹp đồng bộ trên Google Drive (01_Input, 02_Processed, 03_Output)
+        if self.drive_sync_dir and os.path.exists(self.drive_sync_dir):
+            drive_cleanups = [
+                (os.path.join(self.drive_sync_dir, "01_Input_Audio", f"{track_id}.mp3"), False),
+                (os.path.join(self.drive_sync_dir, "01_Input_Audio", f"{track_id}.wav"), False),
+                (os.path.join(self.drive_sync_dir, "02_Processed_Audio", f"{track_id}.mp3"), False),
+                (os.path.join(self.drive_sync_dir, "02_Processed_Audio", f"{track_id}.wav"), False),
+                (os.path.join(self.drive_sync_dir, "03_Output_Stems", track_id), True),
+            ]
+            for target_path, is_dir in drive_cleanups:
+                if os.path.exists(target_path):
+                    try:
+                        if is_dir:
+                            shutil.rmtree(target_path, ignore_errors=True)
+                        else:
+                            os.remove(target_path)
+                    except Exception as e:
+                        print(f"[Drive Cleanup] Không thể xóa {target_path}: {e}")
+
         if deleted:
             self._sync_default_playlist()
 
