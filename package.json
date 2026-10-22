@@ -40,9 +40,17 @@
           "**/*",
           "!**/__pycache__/**",
           "!**/*.pyc",
-          "!cache/**",
+          "!cache_stems/**",
+          "!sync_drive/**",
+          "!active_port.json",
           "!01_Original_Audio/**",
-          "!02_Processed_Audio/**"
+          "!02_Processed_Audio/**",
+          "!03_Output_Stems/**",
+          "!*.mp3",
+          "!*.wav",
+          "!*.flac",
+          "!*.ogg",
+          "!*.m4a"
         ]
       }
     ],
