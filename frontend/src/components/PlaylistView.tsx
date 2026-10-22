@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import {
   Plus,
   Play,
@@ -22,8 +22,79 @@ import {
   Check,
   X,
   ListPlus,
+  UploadCloud,
+  FolderUp,
 } from "lucide-react";
 import type { TrackMeta, Playlist } from "../audio/AdaptiveEngine";
+
+const VALID_EXTENSIONS = [".mp3", ".wav", ".flac", ".m4a", ".ogg"];
+
+export function isValidAudioFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  return VALID_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+// Hàm đệ quy đọc toàn bộ files trong thư mục qua FileSystem API
+export async function extractFilesFromDataTransfer(
+  items: DataTransferItemList
+): Promise<File[]> {
+  const files: File[] = [];
+
+  const traverseFileEntry = (entry: any): Promise<void> => {
+    return new Promise((resolve) => {
+      if (entry.isFile) {
+        entry.file(
+          (file: File) => {
+            if (isValidAudioFile(file.name)) {
+              files.push(file);
+            }
+            resolve();
+          },
+          () => resolve()
+        );
+      } else if (entry.isDirectory) {
+        const dirReader = entry.createReader();
+        const readEntries = () => {
+          dirReader.readEntries(
+            async (entries: any[]) => {
+              if (entries.length === 0) {
+                resolve();
+              } else {
+                for (const childEntry of entries) {
+                  await traverseFileEntry(childEntry);
+                }
+                readEntries();
+              }
+            },
+            () => resolve()
+          );
+        };
+        readEntries();
+      } else {
+        resolve();
+      }
+    });
+  };
+
+  const promises: Promise<void>[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.kind === "file") {
+      const entry = (item as any).webkitGetAsEntry?.();
+      if (entry) {
+        promises.push(traverseFileEntry(entry));
+      } else {
+        const f = item.getAsFile();
+        if (f && isValidAudioFile(f.name)) {
+          files.push(f);
+        }
+      }
+    }
+  }
+
+  await Promise.all(promises);
+  return files;
+}
 
 interface PlaylistViewProps {
   playlists: Playlist[];
@@ -53,6 +124,8 @@ interface PlaylistViewProps {
   onSetEngineMode: (mode: "COLAB_BATCH" | "LOCAL") => void;
   onSetFallbackMode: (mode: "lofi" | "full") => void;
   onForceSync: () => Promise<void>;
+  onUploadFiles: (files: File[]) => void;
+  onUpdateTrackTitle: (trackId: string, newTitle: string) => Promise<void>;
 }
 
 export const PlaylistView: React.FC<PlaylistViewProps> = ({
@@ -83,6 +156,8 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
   onSetEngineMode,
   onSetFallbackMode,
   onForceSync,
+  onUploadFiles,
+  onUpdateTrackTitle,
 }) => {
   const [inputUrl, setInputUrl] = useState("");
   const [loading, setLoading] = useState(false);
@@ -98,8 +173,18 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
   const [renamingName, setRenamingName] = useState("");
   const [showAddTracksPicker, setShowAddTracksPicker] = useState(false);
 
-  // Drag and drop state
+  // Drag and drop ordering state
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+
+  // Local File Ingestion & Folder Drag-and-Drop state
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounter = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Inline Title Editing state
+  const [editingTrackId, setEditingTrackId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
 
   // Lấy playlist đang kích hoạt
   const activePlaylist =
@@ -164,6 +249,75 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
     onSetEngineMode(mode);
   };
 
+  // Handlers Kéo thả File / Thư mục nạp nhạc
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounter.current += 1;
+    if (e.dataTransfer.types.includes("Files")) {
+      setIsDragOver(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounter.current -= 1;
+    if (dragCounter.current <= 0) {
+      setIsDragOver(false);
+      dragCounter.current = 0;
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleDropFiles = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    dragCounter.current = 0;
+
+    try {
+      if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+        const files = await extractFilesFromDataTransfer(e.dataTransfer.items);
+        if (files.length > 0) {
+          onUploadFiles(files);
+        }
+      } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const files = Array.from(e.dataTransfer.files).filter((f) =>
+          isValidAudioFile(f.name)
+        );
+        if (files.length > 0) {
+          onUploadFiles(files);
+        }
+      }
+    } catch (err) {
+      console.error("Lỗi đọc files kéo thả:", err);
+    }
+  };
+
+  // Handlers Sửa tiêu đề bài hát trực tiếp (Inline Edit)
+  const startEditingTitle = (track: TrackMeta) => {
+    setEditingTrackId(track.id);
+    setEditingTitle(track.title);
+  };
+
+  const cancelEditingTitle = () => {
+    setEditingTrackId(null);
+    setEditingTitle("");
+  };
+
+  const saveEditingTitle = async (trackId: string) => {
+    if (editingTitle.trim()) {
+      try {
+        await onUpdateTrackTitle(trackId, editingTitle.trim());
+      } catch (err) {
+        console.error("Lỗi cập nhật tiêu đề:", err);
+      }
+    }
+    setEditingTrackId(null);
+    setEditingTitle("");
+  };
+
   const formatDuration = (sec: number) => {
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
@@ -201,7 +355,26 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
   };
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 backdrop-blur-md">
+    <div
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDropFiles}
+      className="relative rounded-xl border border-slate-800 bg-slate-900/60 p-5 backdrop-blur-md"
+    >
+      {/* Visual Dropzone Overlay khi người dùng kéo file/thư mục qua bảng */}
+      {isDragOver && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-cyan-400 bg-slate-950/92 backdrop-blur-md text-cyan-300 pointer-events-none transition-all">
+          <UploadCloud className="h-12 w-12 text-cyan-400 animate-bounce mb-2" />
+          <p className="text-sm font-bold uppercase tracking-wider text-cyan-200">
+            Thả các file hoặc thư mục âm thanh vào đây
+          </p>
+          <p className="text-xs text-slate-400 mt-1">
+            Hỗ trợ .mp3, .wav, .flac, .m4a, .ogg • Tự động lọc bỏ các file rác
+          </p>
+        </div>
+      )}
+
       {/* 1. Header & Playlist Tabs Navigation */}
       <div className="mb-4 border-b border-slate-800/80 pb-3">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
@@ -523,29 +696,93 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
         </div>
       </div>
 
-      {/* 4. Input URL YouTube */}
-      <form onSubmit={handleSubmit} className="mb-4 flex gap-2">
-        <input
-          type="text"
-          placeholder="Dán URL bài hát hoặc Playlist YouTube..."
-          value={inputUrl}
-          onChange={(e) => setInputUrl(e.target.value)}
-          disabled={loading}
-          className="flex-1 rounded-lg border border-slate-700 bg-slate-950/80 px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500 disabled:opacity-50"
-        />
-        <button
-          type="submit"
-          disabled={loading || !inputUrl.trim()}
-          className="flex items-center gap-1.5 rounded-lg border border-cyan-500/50 bg-cyan-950/50 px-4 py-2 text-xs font-semibold text-cyan-300 transition-all hover:border-cyan-400 hover:bg-cyan-900/60 hover:shadow-[0_0_15px_rgba(6,182,212,0.3)] disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {loading ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Plus className="h-3.5 w-3.5" />
-          )}
-          <span>{loading ? "ĐANG NẠP..." : "THÊM BÀI"}</span>
-        </button>
-      </form>
+      {/* 4. Toolbar Nạp Nhạc: Nạp File Cục Bộ / Thư Mục (BYOA) & URL YouTube */}
+      <div className="mb-4 flex flex-col gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Input file ẩn */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept=".mp3,.wav,.flac,.m4a,.ogg"
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length > 0) {
+                const arr = Array.from(e.target.files).filter((f) =>
+                  isValidAudioFile(f.name)
+                );
+                if (arr.length > 0) onUploadFiles(arr);
+                e.target.value = "";
+              }
+            }}
+          />
+          {/* Input folder ẩn */}
+          <input
+            ref={folderInputRef}
+            type="file"
+            multiple
+            {...({ webkitdirectory: "", directory: "" } as any)}
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length > 0) {
+                const arr = Array.from(e.target.files).filter((f) =>
+                  isValidAudioFile(f.name)
+                );
+                if (arr.length > 0) onUploadFiles(arr);
+                e.target.value = "";
+              }
+            }}
+          />
+
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-1.5 rounded-lg border border-teal-500/40 bg-teal-950/50 px-3 py-1.5 text-xs font-semibold text-teal-300 transition-all hover:border-teal-400 hover:bg-teal-900/60 hover:shadow-[0_0_12px_rgba(20,184,166,0.3)] shrink-0"
+            title="Chọn một hoặc nhiều file (.mp3, .wav, .flac) từ máy tính"
+          >
+            <UploadCloud className="h-3.5 w-3.5" />
+            <span>+ Nạp File Máy</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => folderInputRef.current?.click()}
+            className="flex items-center gap-1.5 rounded-lg border border-indigo-500/40 bg-indigo-950/50 px-3 py-1.5 text-xs font-semibold text-indigo-300 transition-all hover:border-indigo-400 hover:bg-indigo-900/60 hover:shadow-[0_0_12px_rgba(99,102,241,0.3)] shrink-0"
+            title="Nạp toàn bộ một thư mục album nhạc từ máy tính"
+          >
+            <FolderUp className="h-3.5 w-3.5" />
+            <span>📁 Nạp Thư Mục</span>
+          </button>
+
+          <span className="text-[10px] text-slate-500 hidden sm:inline">
+            (Hoặc kéo thả trực tiếp file/folder vào bảng)
+          </span>
+        </div>
+
+        {/* Form URL YouTube */}
+        <form onSubmit={handleSubmit} className="flex gap-2">
+          <input
+            type="text"
+            placeholder="Hoặc dán liên kết bài hát / Playlist YouTube..."
+            value={inputUrl}
+            onChange={(e) => setInputUrl(e.target.value)}
+            disabled={loading}
+            className="flex-1 rounded-lg border border-slate-700 bg-slate-950/80 px-3.5 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500 disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={loading || !inputUrl.trim()}
+            className="flex items-center gap-1.5 rounded-lg border border-cyan-500/50 bg-cyan-950/50 px-3.5 py-1.5 text-xs font-semibold text-cyan-300 transition-all hover:border-cyan-400 hover:bg-cyan-900/60 hover:shadow-[0_0_15px_rgba(6,182,212,0.3)] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {loading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="h-3.5 w-3.5" />
+            )}
+            <span>{loading ? "ĐANG NẠP..." : "DÁN LINK"}</span>
+          </button>
+        </form>
+      </div>
 
       {successMsg && (
         <div className="mb-4 flex items-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-950/40 p-2.5 text-xs text-emerald-300">
@@ -652,14 +889,62 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
                   </button>
 
                   <div className="min-w-0 flex-1">
-                    <p
-                      className={`truncate text-xs font-semibold ${
-                        isCurrent ? "text-cyan-300" : "text-slate-200 group-hover:text-white"
-                      }`}
-                      title={track.title}
-                    >
-                      {track.title}
-                    </p>
+                    {editingTrackId === track.id ? (
+                      <div
+                        className="flex items-center gap-1.5 my-0.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="text"
+                          autoFocus
+                          value={editingTitle}
+                          onChange={(e) => setEditingTitle(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveEditingTitle(track.id);
+                            else if (e.key === "Escape") cancelEditingTitle();
+                          }}
+                          className="w-full rounded border border-cyan-500 bg-slate-900 px-2 py-0.5 text-xs text-white focus:outline-none"
+                        />
+                        <button
+                          onClick={() => saveEditingTitle(track.id)}
+                          className="text-emerald-400 hover:text-emerald-300 p-0.5"
+                          title="Lưu (Enter)"
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={cancelEditingTitle}
+                          className="text-rose-400 hover:text-rose-300 p-0.5"
+                          title="Hủy (Esc)"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5 group/title">
+                        <p
+                          onDoubleClick={() => startEditingTitle(track)}
+                          className={`truncate text-xs font-semibold cursor-pointer ${
+                            isCurrent
+                              ? "text-cyan-300"
+                              : "text-slate-200 group-hover:text-white"
+                          }`}
+                          title={`${track.title} (Nhấp đúp hoặc bấm bút để sửa tên)`}
+                        >
+                          {track.title}
+                        </p>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            startEditingTitle(track);
+                          }}
+                          className="opacity-0 group-hover/title:opacity-100 text-slate-500 hover:text-cyan-300 transition-opacity p-0.5"
+                          title="Sửa tên bài hát"
+                        >
+                          <Edit2 className="h-2.5 w-2.5" />
+                        </button>
+                      </div>
+                    )}
                     <div className="mt-0.5 flex items-center gap-2 text-[10px] text-slate-400">
                       <span>{formatDuration(track.duration)}</span>
                       <span>•</span>

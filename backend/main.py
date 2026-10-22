@@ -6,8 +6,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import secrets
 import asyncio
+import tempfile
 from typing import Dict, Any, List, Optional
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -63,6 +64,9 @@ class ReorderPlaylistRequest(BaseModel):
 class ActivePlaylistRequest(BaseModel):
     playlist_id: str
 
+class UpdateTitleRequest(BaseModel):
+    title: str
+
 @app.get("/api/auth/token")
 def get_session_token():
     return {"token": SESSION_TOKEN}
@@ -89,6 +93,43 @@ def api_add_youtube(req: YouTubeRequest):
 def api_delete_track(track_id: str):
     audio_pipeline.delete_track(track_id)
     return {"status": "success", "deleted_id": track_id}
+
+@app.post("/api/tracks/upload")
+async def api_upload_track(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Không có tệp được chọn")
+
+    ext = os.path.splitext(file.filename)[1]
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+        temp_path = tmp.name
+        try:
+            chunk_size = 1024 * 1024  # 1MB chunk
+            while content := await file.read(chunk_size):
+                tmp.write(content)
+        except Exception as e:
+            tmp.close()
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise HTTPException(status_code=500, detail=f"Lỗi ghi tệp tải lên: {str(e)}")
+
+    try:
+        track = audio_pipeline.add_local_audio_file(temp_path, file.filename)
+        return track
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi xử lý tệp âm thanh: {str(e)}")
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+@app.put("/api/tracks/{track_id}/title")
+def api_update_track_title(track_id: str, req: UpdateTitleRequest):
+    updated = audio_pipeline.update_track_title(track_id, req.title)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bài hát hoặc tiêu đề không hợp lệ")
+    return updated
 
 # ==========================================
 # PLAYLISTS API ENDPOINTS

@@ -8,6 +8,7 @@ import shutil
 import threading
 import subprocess
 import urllib.request
+import hashlib
 from typing import Dict, Any, List, Optional, Tuple
 import yt_dlp
 from pydub import AudioSegment
@@ -43,6 +44,49 @@ def fetch_real_track_info(video_id: str, audio_path: Optional[str] = None) -> Tu
     if audio_path and os.path.exists(audio_path):
         try:
             seg = AudioSegment.from_file(audio_path)
+            duration = int(len(seg) / 1000)
+        except Exception:
+            pass
+
+    return title, duration
+
+def extract_audio_metadata(file_path: str, fallback_title: str = "Unknown Track") -> Tuple[str, int]:
+    """
+    Đọc siêu dữ liệu (Title, Artist, Duration) từ file âm thanh qua ffprobe chuẩn xác và siêu nhẹ (< 15ms).
+    """
+    title = fallback_title
+    duration = 0
+    try:
+        cmd = [
+            "ffprobe", "-v", "quiet",
+            "-print_format", "json",
+            "-show_format",
+            file_path
+        ]
+        creationflags = 0x00004000 if sys.platform == "win32" else 0
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=creationflags)
+        if res.returncode == 0:
+            data = json.loads(res.stdout)
+            fmt = data.get("format", {})
+            if "duration" in fmt:
+                try:
+                    duration = int(float(fmt["duration"]))
+                except Exception:
+                    pass
+            tags = fmt.get("tags", {})
+            tag_title = tags.get("title") or tags.get("TITLE") or tags.get("Title")
+            tag_artist = tags.get("artist") or tags.get("ARTIST") or tags.get("Artist")
+            if tag_title:
+                if tag_artist and tag_artist.lower() not in tag_title.lower():
+                    title = f"{tag_artist} - {tag_title}"
+                else:
+                    title = tag_title
+    except Exception as e:
+        print(f"[Metadata] Lỗi đọc ffprobe metadata: {e}")
+
+    if duration == 0 and os.path.exists(file_path):
+        try:
+            seg = AudioSegment.from_file(file_path)
             duration = int(len(seg) / 1000)
         except Exception:
             pass
@@ -430,6 +474,103 @@ class AudioPipeline:
                 self.sync_from_drive()
             except Exception:
                 pass
+
+    def add_local_audio_file(self, temp_path: str, original_filename: str) -> Dict[str, Any]:
+        """
+        Xử lý nạp file âm thanh cục bộ (BYOA: Bring Your Own Audio):
+        - Băm mã SHA-256 tạo định danh loc_{hash[:12]}
+        - Kiểm tra Cache Hit nếu bài này đã từng nạp hoặc đã tách stems
+        - Chuyển đổi / Chuẩn hóa sang original.mp3 (192kbps)
+        - Trích xuất Title / Artist / Duration qua ffprobe siêu nhẹ
+        - Nếu mode COLAB_BATCH: copy vào 01_Input_Audio/ trên Drive
+        - Nếu mode LOCAL: nạp vào job_queue của Demucs
+        """
+        hasher = hashlib.sha256()
+        with open(temp_path, "rb") as f:
+            while chunk := f.read(65536):
+                hasher.update(chunk)
+        track_hash = hasher.hexdigest()[:12]
+        track_id = f"loc_{track_hash}"
+
+        # Bỏ blacklist nếu từng xóa bài này
+        if track_id in self.deleted_tracks:
+            self.deleted_tracks.remove(track_id)
+            self._save_deleted_tracks()
+
+        track_dir = os.path.join(CACHE_DIR, track_id)
+        os.makedirs(track_dir, exist_ok=True)
+        original_mp3 = os.path.join(track_dir, "original.mp3")
+
+        # Kiểm tra Cache Hit cho 4 Stems
+        has_stems = all(
+            os.path.exists(os.path.join(track_dir, f"{s}.mp3")) and os.path.getsize(os.path.join(track_dir, f"{s}.mp3")) > 0
+            for s in ["vocals", "other", "bass", "drums"]
+        )
+        cache_hit = has_stems
+
+        # Tên gốc bỏ phần mở rộng làm fallback title
+        base_name, _ = os.path.splitext(original_filename)
+        fallback_title = base_name.strip() if base_name.strip() else f"Local Track {track_hash}"
+
+        # Chuyển đổi sang original.mp3 nếu chưa tồn tại
+        if not os.path.exists(original_mp3) or os.path.getsize(original_mp3) == 0:
+            cmd = [
+                "ffmpeg", "-y", "-i", temp_path,
+                "-vn", "-ar", "44100", "-ac", "2", "-b:a", "192k",
+                original_mp3
+            ]
+            creationflags = 0x00004000 if sys.platform == "win32" else 0
+            conv_res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=creationflags)
+            if conv_res.returncode != 0:
+                if temp_path.lower().endswith(".mp3"):
+                    shutil.copy2(temp_path, original_mp3)
+                else:
+                    raise RuntimeError(f"FFmpeg chuyển đổi thất bại: {conv_res.stderr.decode('utf-8', errors='ignore')[-300:]}")
+
+        # Đọc metadata qua ffprobe
+        title, duration = extract_audio_metadata(original_mp3, fallback_title)
+
+        status = "READY" if has_stems else ("WAITING_COLAB" if self.engine_mode == "COLAB_BATCH" else "QUEUED")
+        track_data = {
+            "id": track_id,
+            "title": title,
+            "duration": duration,
+            "thumbnail": "",
+            "status": status,
+            "has_stems": has_stems,
+            "original_path": original_mp3,
+            "source": "local",
+            "cache_hit": cache_hit
+        }
+
+        self.tracks[track_id] = track_data
+
+        # Đồng bộ sang Colab hoặc Local Demucs nếu chưa có stems
+        if not has_stems:
+            if self.engine_mode == "COLAB_BATCH":
+                input_drive_file = os.path.join(self.drive_sync_dir, "01_Input_Audio", f"{track_id}.mp3")
+                if not os.path.exists(input_drive_file):
+                    try:
+                        shutil.copy2(original_mp3, input_drive_file)
+                        print(f"[Colab Batch] Đã nạp file local {track_id}.mp3 vào 01_Input_Audio/")
+                    except Exception as e:
+                        print(f"[Colab Batch] Lỗi nạp file local vào Drive: {e}")
+            else:
+                self.job_queue.put(track_id)
+
+        self._save_tracks()
+        self._sync_default_playlist()
+        print(f"[AudioPipeline] Nạp file local thành công: '{title}' ({track_id}) - Cache Hit: {cache_hit}")
+
+        return track_data
+
+    def update_track_title(self, track_id: str, new_title: str) -> Optional[Dict[str, Any]]:
+        clean_title = new_title.strip()
+        if not clean_title or track_id not in self.tracks:
+            return None
+        self.tracks[track_id]["title"] = clean_title
+        self._save_tracks()
+        return self.tracks[track_id]
 
     def add_youtube_url(self, url: str) -> Dict[str, Any]:
         """

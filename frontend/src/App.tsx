@@ -18,6 +18,7 @@ import { FlowMeter } from "./components/FlowMeter";
 import { ActiveStemMixer } from "./components/ActiveStemMixer";
 import { PlaylistView } from "./components/PlaylistView";
 import { DevWrappedModal } from "./components/DevWrappedModal";
+import { UploadQueuePanel, type UploadItem } from "./components/UploadQueuePanel";
 import { useDesktopSocket } from "./hooks/useDesktopSocket";
 import { useMeetingDucking } from "./hooks/useMeetingDucking";
 import { useFlowAnalytics } from "./hooks/useFlowAnalytics";
@@ -54,6 +55,7 @@ export function App() {
   const [djCrossfade, setDjCrossfade] = useState<boolean>(adaptiveEngine.getDJCrossfadeEnabled());
   const [isTransitioning, setIsTransitioning] = useState<boolean>(false);
   const [isDevWrappedOpen, setIsDevWrappedOpen] = useState<boolean>(false);
+  const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([]);
 
   // Hook Meeting / Call Auto-Ducking
   const {
@@ -472,6 +474,140 @@ export function App() {
     }
   };
 
+  // Xử lý nạp File Cục Bộ (BYOA) với Concurrency Pool = 2
+  const handleUploadFiles = useCallback(
+    (files: File[]) => {
+      if (files.length === 0) return;
+
+      const newItems: UploadItem[] = files.map((file) => ({
+        id: Math.random().toString(36).substring(2, 9),
+        name: file.name,
+        size: file.size,
+        status: "pending",
+        progress: 0,
+      }));
+
+      setUploadQueue((prev) => [...prev, ...newItems]);
+
+      const fileQueue = files.map((file, idx) => ({
+        file,
+        item: newItems[idx],
+      }));
+
+      const updateItem = (id: string, updates: Partial<UploadItem>) => {
+        setUploadQueue((prev) =>
+          prev.map((it) => (it.id === id ? { ...it, ...updates } : it))
+        );
+      };
+
+      const processFile = async ({
+        file,
+        item,
+      }: {
+        file: File;
+        item: UploadItem;
+      }) => {
+        updateItem(item.id, { status: "uploading", progress: 10 });
+
+        return new Promise<void>((resolve) => {
+          const xhr = new XMLHttpRequest();
+          const formData = new FormData();
+          formData.append("file", file);
+
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              const p = Math.round((e.loaded / e.total) * 90);
+              updateItem(item.id, { progress: Math.max(10, p) });
+            }
+          };
+
+          xhr.onload = async () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              try {
+                const data = JSON.parse(xhr.responseText);
+                const isCacheHit = data.cache_hit || data.has_stems;
+                updateItem(item.id, {
+                  status: isCacheHit ? "cache_hit" : "ready",
+                  progress: 100,
+                });
+                await fetchTracks();
+                await fetchPlaylists();
+              } catch {
+                updateItem(item.id, { status: "ready", progress: 100 });
+              }
+            } else {
+              let msg = `Lỗi ${xhr.status}`;
+              try {
+                const res = JSON.parse(xhr.responseText);
+                if (res.detail) msg = res.detail;
+              } catch {}
+              updateItem(item.id, { status: "error", errorMessage: msg });
+            }
+            resolve();
+          };
+
+          xhr.onerror = () => {
+            updateItem(item.id, {
+              status: "error",
+              errorMessage: "Lỗi kết nối máy chủ",
+            });
+            resolve();
+          };
+
+          xhr.open("POST", "http://127.0.0.1:8000/api/tracks/upload");
+          xhr.send(formData);
+        });
+      };
+
+      // Pool concurrency = 2
+      const concurrency = 2;
+      let index = 0;
+
+      const runWorker = async () => {
+        while (index < fileQueue.length) {
+          const currentIndex = index++;
+          const target = fileQueue[currentIndex];
+          if (target) {
+            await processFile(target);
+          }
+        }
+      };
+
+      const workers = Array.from(
+        { length: Math.min(concurrency, fileQueue.length) },
+        () => runWorker()
+      );
+      Promise.all(workers).then(() => {
+        fetchTracks();
+        fetchPlaylists();
+      });
+    },
+    [fetchTracks, fetchPlaylists]
+  );
+
+  // Cập nhật tiêu đề bài hát trực tiếp (Inline Edit)
+  const handleUpdateTrackTitle = useCallback(
+    async (trackId: string, newTitle: string) => {
+      try {
+        const resp = await fetch(
+          `http://127.0.0.1:8000/api/tracks/${trackId}/title`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: newTitle }),
+          }
+        );
+        if (resp.ok) {
+          await fetchTracks();
+          await fetchPlaylists();
+        }
+      } catch (err) {
+        console.error("Lỗi cập nhật tiêu đề:", err);
+      }
+    },
+    [fetchTracks, fetchPlaylists]
+  );
+
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
     setCurrentTime(val);
@@ -589,6 +725,8 @@ export function App() {
                 await fetchTracks();
                 await fetchPlaylists();
               }}
+              onUploadFiles={handleUploadFiles}
+              onUpdateTrackTitle={handleUpdateTrackTitle}
             />
           </div>
         </div>
@@ -772,6 +910,19 @@ export function App() {
           topTracks={topTracks}
           flowRatio={flowRatio}
           onResetToday={resetTodayStats}
+        />
+
+        {/* 6. Mini Panel Tiến Trình Nạp Thư Viện Nhạc Cục Bộ (BYOA) */}
+        <UploadQueuePanel
+          queue={uploadQueue}
+          onDismiss={() => setUploadQueue([])}
+          onClearCompleted={() =>
+            setUploadQueue((prev) =>
+              prev.filter(
+                (it) => it.status !== "ready" && it.status !== "cache_hit"
+              )
+            )
+          }
         />
       </main>
     </div>
