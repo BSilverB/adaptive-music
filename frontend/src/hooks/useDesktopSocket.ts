@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { adaptiveEngine } from "../audio/AdaptiveEngine";
+import { getApiBaseUrl, getWsBaseUrl } from "../config/api";
 
 export interface ActivityState {
   idle_seconds: number;
@@ -58,12 +59,12 @@ export function useDesktopSocket() {
   const connect = useCallback(async () => {
     try {
       // 1. Lấy session token bảo mật
-      const tokenResp = await fetch("http://127.0.0.1:8000/api/auth/token");
+      const tokenResp = await fetch(`${getApiBaseUrl()}/api/auth/token`);
       if (!tokenResp.ok) throw new Error("Không lấy được token");
       const { token } = await tokenResp.json();
 
       // 2. Khởi tạo kết nối WebSocket với token
-      const ws = new WebSocket(`ws://127.0.0.1:8000/ws?token=${token}`);
+      const ws = new WebSocket(`${getWsBaseUrl()}/ws?token=${token}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -116,12 +117,33 @@ export function useDesktopSocket() {
     };
   }, [connect]);
 
+  // Nhịp tim kiểm tra sự sống (Heartbeat Ping định kỳ 3 giây nuôi Watchdog Backend)
+  useEffect(() => {
+    const pingInterval = setInterval(() => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ action: "PING" }));
+      }
+    }, 3000);
+    return () => clearInterval(pingInterval);
+  }, []);
+
+  // Báo tử (Suicide Beacon): Khi cửa sổ tắt hoặc refresh, gửi tín hiệu tắt sạch backend nếu ở chế độ Desktop
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      try {
+        navigator.sendBeacon(`${getApiBaseUrl()}/api/system/shutdown`);
+      } catch {}
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
+
   const triggerBurst = async (durationSec: number = 15) => {
     try {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ action: "BURST", duration: durationSec }));
       } else {
-        await fetch("http://127.0.0.1:8000/api/controls/burst", {
+        await fetch(`${getApiBaseUrl()}/api/controls/burst`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ duration_seconds: durationSec })
@@ -137,7 +159,7 @@ export function useDesktopSocket() {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ action: "RESET_BURST" }));
       } else {
-        await fetch("http://127.0.0.1:8000/api/controls/burst-cancel", {
+        await fetch(`${getApiBaseUrl()}/api/controls/burst-cancel`, {
           method: "POST"
         });
       }
@@ -148,7 +170,7 @@ export function useDesktopSocket() {
 
   const toggleAutoFatigue = async (enabled: boolean) => {
     try {
-      await fetch("http://127.0.0.1:8000/api/controls/auto-fatigue", {
+      await fetch(`${getApiBaseUrl()}/api/controls/auto-fatigue`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled })
@@ -160,7 +182,7 @@ export function useDesktopSocket() {
 
   const forceSyncDrive = async () => {
     try {
-      const resp = await fetch("http://127.0.0.1:8000/api/sync/check-drive", {
+      const resp = await fetch(`${getApiBaseUrl()}/api/sync/check-drive`, {
         method: "POST"
       });
       return await resp.json();
@@ -172,7 +194,7 @@ export function useDesktopSocket() {
 
   const setEngineMode = async (mode: "COLAB_BATCH" | "LOCAL") => {
     try {
-      await fetch("http://127.0.0.1:8000/api/settings/engine-mode", {
+      await fetch(`${getApiBaseUrl()}/api/settings/engine-mode`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode })

@@ -60,3 +60,7 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Electron packaging & runtime
+release/
+backend/active_port.json

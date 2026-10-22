@@ -4,6 +4,8 @@
  * và quản lý RAM với cơ chế Single-Track Buffer Pool cho cả 4 stems: Vocals, Other, Bass, Drums.
  */
 
+import { getApiBaseUrl } from "../config/api";
+
 export interface TrackMeta {
   id: string;
   title: string;
@@ -575,16 +577,16 @@ export class AdaptiveEngine {
       this.initContext();
       if (track.has_stems) {
         const [vocals, other, bass, drums] = await Promise.all([
-          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${track.id}/audio/vocals`),
-          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${track.id}/audio/other`),
-          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${track.id}/audio/bass`),
-          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${track.id}/audio/drums`),
+          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/vocals`),
+          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/other`),
+          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/bass`),
+          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/drums`),
         ]);
         this.preloadedBuffers = { vocals, other, bass, drums };
         this.preloadedOriginalBuffer = null;
       } else {
         this.preloadedOriginalBuffer = await this.fetchAndDecode(
-          `http://127.0.0.1:8000/api/tracks/${track.id}/audio/original`
+          `${getApiBaseUrl()}/api/tracks/${track.id}/audio/original`
         );
         this.preloadedBuffers = null;
       }
@@ -634,17 +636,17 @@ export class AdaptiveEngine {
     if (nextTrack.has_stems) {
       if (!nextBuffers || !nextBuffers.vocals || !nextBuffers.other || !nextBuffers.bass || !nextBuffers.drums) {
         const [vocals, other, bass, drums] = await Promise.all([
-          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${nextTrack.id}/audio/vocals`),
-          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${nextTrack.id}/audio/other`),
-          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${nextTrack.id}/audio/bass`),
-          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${nextTrack.id}/audio/drums`),
+          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${nextTrack.id}/audio/vocals`),
+          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${nextTrack.id}/audio/other`),
+          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${nextTrack.id}/audio/bass`),
+          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${nextTrack.id}/audio/drums`),
         ]);
         nextBuffers = { vocals, other, bass, drums };
       }
       this.buffers = nextBuffers;
     } else {
       if (!nextOrigBuffer) {
-        nextOrigBuffer = await this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${nextTrack.id}/audio/original`);
+        nextOrigBuffer = await this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${nextTrack.id}/audio/original`);
       }
       this.originalBuffer = nextOrigBuffer;
     }
@@ -942,10 +944,10 @@ export class AdaptiveEngine {
       const needFetch = !this.buffers.vocals || !this.buffers.other || !this.buffers.bass || !this.buffers.drums;
       if (needFetch) {
         const [vocals, other, bass, drums] = await Promise.all([
-          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${track.id}/audio/vocals`),
-          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${track.id}/audio/other`),
-          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${track.id}/audio/bass`),
-          this.fetchAndDecode(`http://127.0.0.1:8000/api/tracks/${track.id}/audio/drums`),
+          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/vocals`),
+          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/other`),
+          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/bass`),
+          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/drums`),
         ]);
         this.buffers.vocals = vocals;
         this.buffers.other = other;
@@ -957,7 +959,7 @@ export class AdaptiveEngine {
       // Chế độ Fallback Lo-Fi tức thời (bài gốc)
       if (!this.originalBuffer) {
         this.originalBuffer = await this.fetchAndDecode(
-          `http://127.0.0.1:8000/api/tracks/${track.id}/audio/original`
+          `${getApiBaseUrl()}/api/tracks/${track.id}/audio/original`
         );
       }
       this.startFallbackPlayback(offsetSec);

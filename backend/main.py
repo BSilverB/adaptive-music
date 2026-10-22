@@ -7,6 +7,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import secrets
 import asyncio
 import tempfile
+import socket
+import threading
+import time
+import json
+import argparse
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,16 +29,32 @@ SESSION_TOKEN = secrets.token_hex(16)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173"
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 monitor = ActivityMonitor()
+
+# Cơ chế Heartbeat & Watchdog diệt tiến trình ma (Parent-Child Suicide Watchdog)
+WATCHDOG_ENABLED = os.environ.get("WATCHDOG_ENABLED", "0") == "1" or "--watchdog" in sys.argv
+last_heartbeat_time = time.time()
+has_connected_once = False
+
+def start_watchdog_thread():
+    global last_heartbeat_time, has_connected_once
+    while True:
+        time.sleep(2)
+        if WATCHDOG_ENABLED and has_connected_once:
+            if len(manager.active_connections) == 0:
+                elapsed = time.time() - last_heartbeat_time
+                if elapsed > 8.0:
+                    print(f"[Watchdog Suicide] Mất kết nối với Frontend ({elapsed:.1f}s > 8s). Tự động đóng Backend!")
+                    os._exit(0)
+
+watchdog_t = threading.Thread(target=start_watchdog_thread, daemon=True)
+watchdog_t.start()
 
 class YouTubeRequest(BaseModel):
     url: str
@@ -244,6 +265,22 @@ def api_reset_pomodoro():
     monitor.reset_pomodoro()
     return {"status": "success", "message": "Pomodoro reset"}
 
+@app.post("/api/system/heartbeat")
+def api_heartbeat():
+    global last_heartbeat_time, has_connected_once
+    last_heartbeat_time = time.time()
+    has_connected_once = True
+    return {"status": "ok", "timestamp": last_heartbeat_time}
+
+@app.post("/api/system/shutdown")
+def api_shutdown():
+    def delayed_exit():
+        time.sleep(0.3)
+        print("[System] Nhận tín hiệu tắt từ Desktop Master. Đóng tiến trình Python!")
+        os._exit(0)
+    threading.Thread(target=delayed_exit, daemon=True).start()
+    return {"status": "shutting_down"}
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -267,19 +304,27 @@ manager = ConnectionManager()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
+    global last_heartbeat_time, has_connected_once
     if token != SESSION_TOKEN:
         await websocket.close(code=1008)
         return
 
     await manager.connect(websocket)
+    has_connected_once = True
+    last_heartbeat_time = time.time()
+
     try:
         while True:
             try:
                 data = await asyncio.wait_for(websocket.receive_json(), timeout=1.0)
+                last_heartbeat_time = time.time()
                 if data.get("action") == "BURST":
                     monitor.trigger_manual_burst(data.get("duration", 15.0))
                 elif data.get("action") == "RESET_BURST":
                     monitor.cancel_manual_burst()
+                elif data.get("action") == "PING":
+                    # Nhịp tim kiểm tra sự sống (Heartbeat ping)
+                    pass
             except asyncio.TimeoutError:
                 pass
 
@@ -302,7 +347,40 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
     except Exception:
         manager.disconnect(websocket)
 
+def find_free_port(start_port: int = 8000, max_attempts: int = 50) -> int:
+    for p in range(start_port, start_port + max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", p))
+                return p
+            except OSError:
+                continue
+    return start_port
+
 if __name__ == "__main__":
     import uvicorn
-    print(f"Khởi động Backend tại http://127.0.0.1:8000 (Session Token: {SESSION_TOKEN})")
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=False)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=None, help="Port to run backend")
+    parser.add_argument("--watchdog", action="store_true", help="Enable suicide watchdog")
+    args, unknown = parser.parse_known_args()
+
+    port = args.port or int(os.environ.get("BACKEND_PORT", 0)) or find_free_port(8000)
+    if args.watchdog:
+        WATCHDOG_ENABLED = True
+
+    # Lưu thông tin port đang chạy để Desktop / Frontend đọc
+    port_info = {
+        "port": port,
+        "token": SESSION_TOKEN,
+        "pid": os.getpid(),
+        "created_at": time.time()
+    }
+    port_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "active_port.json")
+    try:
+        with open(port_file, "w", encoding="utf-8") as pf:
+            json.dump(port_info, pf, indent=2)
+    except Exception as e:
+        print(f"[Port] Lỗi ghi active_port.json: {e}")
+
+    print(f"Khởi động Backend tại http://127.0.0.1:{port} (Session Token: {SESSION_TOKEN}, Watchdog: {WATCHDOG_ENABLED})")
+    uvicorn.run("main:app", host="127.0.0.1", port=port, reload=False)

@@ -25,6 +25,7 @@ import { useMeetingDucking } from "./hooks/useMeetingDucking";
 import { useFlowAnalytics } from "./hooks/useFlowAnalytics";
 import { adaptiveEngine } from "./audio/AdaptiveEngine";
 import type { TrackMeta, Playlist, AmbientType, Spatial8DState } from "./audio/AdaptiveEngine";
+import { getApiBaseUrl } from "./config/api";
 
 export function App() {
   const {
@@ -113,7 +114,7 @@ export function App() {
   // Lấy danh sách bài hát từ backend
   const fetchTracks = useCallback(async () => {
     try {
-      const resp = await fetch("http://127.0.0.1:8000/api/tracks");
+      const resp = await fetch(`${getApiBaseUrl()}/api/tracks`);
       if (resp.ok) {
         const data = await resp.json();
         setTracks(data);
@@ -126,7 +127,7 @@ export function App() {
   // Lấy danh sách Playlists từ backend
   const fetchPlaylists = useCallback(async () => {
     try {
-      const resp = await fetch("http://127.0.0.1:8000/api/playlists");
+      const resp = await fetch(`${getApiBaseUrl()}/api/playlists`);
       if (resp.ok) {
         const data = await resp.json();
         const plList: Playlist[] = Object.values(data.playlists || {});
@@ -384,7 +385,7 @@ export function App() {
   const handleSelectPlaylist = async (playlistId: string) => {
     setActivePlaylistId(playlistId);
     try {
-      await fetch("http://127.0.0.1:8000/api/playlists/active", {
+      await fetch(`${getApiBaseUrl()}/api/playlists/active`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ playlist_id: playlistId }),
@@ -399,7 +400,7 @@ export function App() {
   };
 
   const handleCreatePlaylist = async (name: string) => {
-    const resp = await fetch("http://127.0.0.1:8000/api/playlists", {
+    const resp = await fetch(`${getApiBaseUrl()}/api/playlists`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, track_ids: [] }),
@@ -414,7 +415,7 @@ export function App() {
   };
 
   const handleRenamePlaylist = async (playlistId: string, newName: string) => {
-    await fetch(`http://127.0.0.1:8000/api/playlists/${playlistId}`, {
+    await fetch(`${getApiBaseUrl()}/api/playlists/${playlistId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: newName }),
@@ -423,7 +424,7 @@ export function App() {
   };
 
   const handleDeletePlaylist = async (playlistId: string) => {
-    await fetch(`http://127.0.0.1:8000/api/playlists/${playlistId}`, {
+    await fetch(`${getApiBaseUrl()}/api/playlists/${playlistId}`, {
       method: "DELETE",
     });
     setActivePlaylistId("default");
@@ -435,7 +436,7 @@ export function App() {
     setPlaylists((prev) =>
       prev.map((pl) => (pl.id === playlistId ? { ...pl, track_ids: trackIds } : pl))
     );
-    await fetch(`http://127.0.0.1:8000/api/playlists/${playlistId}/reorder`, {
+    await fetch(`${getApiBaseUrl()}/api/playlists/${playlistId}/reorder`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ track_ids: trackIds }),
@@ -447,7 +448,7 @@ export function App() {
     const pl = playlists.find((p) => p.id === playlistId);
     if (!pl) return;
     const updatedIds = [...pl.track_ids, ...trackIdsToAdd];
-    await fetch(`http://127.0.0.1:8000/api/playlists/${playlistId}`, {
+    await fetch(`${getApiBaseUrl()}/api/playlists/${playlistId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ track_ids: updatedIds }),
@@ -459,7 +460,7 @@ export function App() {
     const pl = playlists.find((p) => p.id === playlistId);
     if (!pl) return;
     const updatedIds = pl.track_ids.filter((id) => id !== trackIdToRemove);
-    await fetch(`http://127.0.0.1:8000/api/playlists/${playlistId}`, {
+    await fetch(`${getApiBaseUrl()}/api/playlists/${playlistId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ track_ids: updatedIds }),
@@ -468,7 +469,7 @@ export function App() {
   };
 
   const handleAddYouTube = async (url: string) => {
-    const resp = await fetch("http://127.0.0.1:8000/api/tracks/youtube", {
+    const resp = await fetch(`${getApiBaseUrl()}/api/tracks/youtube`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
@@ -483,7 +484,7 @@ export function App() {
 
   const handleDeleteTrack = async (trackId: string) => {
     try {
-      await fetch(`http://127.0.0.1:8000/api/tracks/${trackId}`, { method: "DELETE" });
+      await fetch(`${getApiBaseUrl()}/api/tracks/${trackId}`, { method: "DELETE" });
       await fetchTracks();
       await fetchPlaylists();
     } catch (e) {
@@ -571,7 +572,7 @@ export function App() {
             resolve();
           };
 
-          xhr.open("POST", "http://127.0.0.1:8000/api/tracks/upload");
+          xhr.open("POST", `${getApiBaseUrl()}/api/tracks/upload`);
           xhr.send(formData);
         });
       };
@@ -607,7 +608,7 @@ export function App() {
     async (trackId: string, newTitle: string) => {
       try {
         const resp = await fetch(
-          `http://127.0.0.1:8000/api/tracks/${trackId}/title`,
+          `${getApiBaseUrl()}/api/tracks/${trackId}/title`,
           {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
