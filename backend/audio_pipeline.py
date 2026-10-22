@@ -12,7 +12,6 @@ import hashlib
 from typing import Dict, Any, List, Optional, Tuple
 import yt_dlp
 from pydub import AudioSegment
-import torch
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(BASE_DIR, "cache_stems")
@@ -93,6 +92,13 @@ def extract_audio_metadata(file_path: str, fallback_title: str = "Unknown Track"
 
     return title, duration
 
+def is_cuda_available() -> bool:
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except Exception:
+        return False
+
 class AudioPipeline:
     """
     Quản lý tải nhạc (yt-dlp đơn bài lẫn cả Playlist) và điều phối 2 chế độ xử lý:
@@ -101,7 +107,7 @@ class AudioPipeline:
     """
 
     def __init__(self):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = "cuda" if is_cuda_available() else "cpu"
         self.engine_mode = "COLAB_BATCH" if self.device == "cpu" else "LOCAL"
         
         self.drive_sync_dir = self._detect_drive_sync_dir()

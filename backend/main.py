@@ -383,4 +383,4 @@ if __name__ == "__main__":
         print(f"[Port] Lỗi ghi active_port.json: {e}")
 
     print(f"Khởi động Backend tại http://127.0.0.1:{port} (Session Token: {SESSION_TOKEN}, Watchdog: {WATCHDOG_ENABLED})")
-    uvicorn.run("main:app", host="127.0.0.1", port=port, reload=False)
+    uvicorn.run(app, host="127.0.0.1", port=port)

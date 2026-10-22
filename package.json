@@ -5,6 +5,7 @@
   "main": "electron/main.cjs",
   "scripts": {
     "frontend:build": "npm --prefix frontend run build",
+    "backend:build": "python -m PyInstaller --clean --onefile --name backend_engine --exclude-module pkg_resources --exclude-module setuptools --exclude-module torch --exclude-module torchaudio --exclude-module torchvision --exclude-module matplotlib --exclude-module scipy backend/main.py",
     "backend": "python backend/main.py --watchdog",
     "start": "electron .",
     "desktop": "npm run frontend:build && electron .",

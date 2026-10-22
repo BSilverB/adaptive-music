@@ -146,10 +146,23 @@ app.whenReady().then(async () => {
     const backendDir = app.isPackaged
       ? path.join(process.resourcesPath, "backend")
       : path.join(__dirname, "..", "backend");
-    const backendScript = path.join(backendDir, "main.py");
 
-    console.log(`[Electron] Khởi động Python Backend tại thư mục: ${backendDir}...`);
-    pythonProcess = spawn("python", ["-u", backendScript, "--port", String(currentPort), "--watchdog"], {
+    const standaloneExe = path.join(backendDir, "backend_engine.exe");
+    const backendScript = path.join(backendDir, "main.py");
+    const fs = require("fs");
+
+    let spawnCmd, spawnArgs;
+    if (fs.existsSync(standaloneExe)) {
+      console.log(`[Electron] Khởi chạy Backend Engine độc lập: ${standaloneExe}`);
+      spawnCmd = standaloneExe;
+      spawnArgs = ["--port", String(currentPort), "--watchdog"];
+    } else {
+      console.log(`[Electron] Khởi chạy Python hệ thống: python ${backendScript}`);
+      spawnCmd = "python";
+      spawnArgs = ["-u", backendScript, "--port", String(currentPort), "--watchdog"];
+    }
+
+    pythonProcess = spawn(spawnCmd, spawnArgs, {
       cwd: backendDir,
       stdio: "pipe",
       env: { ...process.env, BACKEND_PORT: String(currentPort) },

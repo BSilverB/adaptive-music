@@ -1,6 +1,5 @@
 import os
 import psutil
-import torch
 
 def get_system_profile() -> dict:
     """
@@ -14,7 +13,15 @@ def get_system_profile() -> dict:
     available_ram_gb = round(mem.available / (1024 ** 3), 2)
     cpu_percent = psutil.cpu_percent(interval=None)
 
-    cuda_available = torch.cuda.is_available()
+    cuda_available = False
+    torch_module = None
+    try:
+        import torch
+        torch_module = torch
+        cuda_available = torch.cuda.is_available()
+    except Exception:
+        pass
+
     gpu_info = {
         "available": False,
         "device_name": "None (CPU Mode)",
@@ -22,13 +29,12 @@ def get_system_profile() -> dict:
         "vram_free_gb": 0.0
     }
 
-    if cuda_available:
+    if cuda_available and torch_module is not None:
         try:
-            device_name = torch.cuda.get_device_name(0)
-            props = torch.cuda.get_device_properties(0)
+            device_name = torch_module.cuda.get_device_name(0)
+            props = torch_module.cuda.get_device_properties(0)
             total_vram = round(props.total_memory / (1024 ** 3), 2)
-            mem_reserved = torch.cuda.memory_reserved(0)
-            mem_allocated = torch.cuda.memory_allocated(0)
+            mem_reserved = torch_module.cuda.memory_reserved(0)
             free_vram = round((props.total_memory - mem_reserved) / (1024 ** 3), 2)
 
             gpu_info = {
