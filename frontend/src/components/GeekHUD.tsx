@@ -1,5 +1,5 @@
 import React from "react";
-import { Activity, Cpu, HardDrive, Sparkles, Wifi, Mic, MicOff, BarChart2 } from "lucide-react";
+import { Activity, Cpu, HardDrive, Sparkles, Wifi, Mic, MicOff, BarChart2, Scale } from "lucide-react";
 import type { SystemState, QueueState } from "../hooks/useDesktopSocket";
 
 interface GeekHUDProps {
@@ -13,6 +13,7 @@ interface GeekHUDProps {
   flowRatio?: number;
   onToggleMicDucking?: () => void;
   onOpenDevWrapped?: () => void;
+  onOpenLegal?: () => void;
 }
 
 export const GeekHUD: React.FC<GeekHUDProps> = ({
@@ -25,6 +26,7 @@ export const GeekHUD: React.FC<GeekHUDProps> = ({
   flowRatio = 100,
   onToggleMicDucking,
   onOpenDevWrapped,
+  onOpenLegal,
 }) => {
   const formatIdle = (sec: number) => {
     const m = Math.floor(sec / 60);
@@ -147,6 +149,18 @@ export const GeekHUD: React.FC<GeekHUDProps> = ({
               <span className="rounded bg-cyan-900/60 px-1 py-0.2 font-mono text-[9px] text-cyan-300 tabular-nums">
                 {flowRatio}%
               </span>
+            </button>
+          )}
+
+          {/* Legal & EULA Button */}
+          {onOpenLegal && (
+            <button
+              onClick={onOpenLegal}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-700/80 bg-slate-900/80 px-2 py-1 text-[11px] font-semibold text-slate-300 transition-all hover:border-cyan-500/50 hover:text-cyan-300 shrink-0 active:scale-95"
+              title="Xem Thỏa thuận người dùng EULA & Giấy phép bản quyền (Meta Demucs MIT)"
+            >
+              <Scale className="h-3 w-3 text-slate-400" />
+              <span>PHÁP LÝ</span>
             </button>
           )}
         </div>

@@ -18,6 +18,7 @@ import { FlowMeter } from "./components/FlowMeter";
 import { ActiveStemMixer } from "./components/ActiveStemMixer";
 import { PlaylistView } from "./components/PlaylistView";
 import { DevWrappedModal } from "./components/DevWrappedModal";
+import { LegalEulaModal } from "./components/LegalEulaModal";
 import { UploadQueuePanel, type UploadItem } from "./components/UploadQueuePanel";
 import { useDesktopSocket } from "./hooks/useDesktopSocket";
 import { useMeetingDucking } from "./hooks/useMeetingDucking";
@@ -56,6 +57,22 @@ export function App() {
   const [isTransitioning, setIsTransitioning] = useState<boolean>(false);
   const [isDevWrappedOpen, setIsDevWrappedOpen] = useState<boolean>(false);
   const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([]);
+  const [isEulaAccepted, setIsEulaAccepted] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("adaptive_eula_accepted") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [isLegalModalOpen, setIsLegalModalOpen] = useState<boolean>(false);
+
+  const handleAcceptEula = () => {
+    try {
+      localStorage.setItem("adaptive_eula_accepted", "true");
+    } catch {}
+    setIsEulaAccepted(true);
+    setIsLegalModalOpen(false);
+  };
 
   // Hook Meeting / Call Auto-Ducking
   const {
@@ -634,6 +651,7 @@ export function App() {
         flowRatio={flowRatio}
         onToggleMicDucking={toggleMicDucking}
         onOpenDevWrapped={() => setIsDevWrappedOpen(true)}
+        onOpenLegal={() => setIsLegalModalOpen(true)}
       />
 
       {/* 2. Banner Vượt rào Autoplay Policy (Nếu chưa click) */}
@@ -923,6 +941,14 @@ export function App() {
               )
             )
           }
+        />
+
+        {/* 7. Modal Điều Khoản Sử Dụng (EULA) & Giấy Phép Bên Thứ Ba */}
+        <LegalEulaModal
+          isOpen={!isEulaAccepted || isLegalModalOpen}
+          isFirstRun={!isEulaAccepted}
+          onAccept={handleAcceptEula}
+          onClose={() => setIsLegalModalOpen(false)}
         />
       </main>
     </div>

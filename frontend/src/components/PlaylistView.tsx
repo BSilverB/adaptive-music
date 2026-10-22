@@ -26,6 +26,7 @@ import {
   FolderUp,
 } from "lucide-react";
 import type { TrackMeta, Playlist } from "../audio/AdaptiveEngine";
+import { YtDlpConsentModal } from "./YtDlpConsentModal";
 
 const VALID_EXTENSIONS = [".mp3", ".wav", ".flac", ".m4a", ".ogg"];
 
@@ -186,6 +187,9 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
 
+  // Decoupled yt-dlp Consent modal state
+  const [showYtDlpConsent, setShowYtDlpConsent] = useState(false);
+
   // Lấy playlist đang kích hoạt
   const activePlaylist =
     playlists.find((p) => p.id === activePlaylistId) ||
@@ -212,15 +216,12 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
     (t) => !activePlaylist.track_ids.includes(t.id)
   );
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputUrl.trim()) return;
-
+  const executeAddYouTube = async (url: string) => {
     setLoading(true);
     setErrorMsg(null);
     setSuccessMsg(null);
     try {
-      await onAddYouTube(inputUrl.trim());
+      await onAddYouTube(url);
       setInputUrl("");
       setSuccessMsg("Đã nạp thành công! Audio đang được xử lý và tự động cập nhật vào danh sách.");
       setTimeout(() => setSuccessMsg(null), 6000);
@@ -229,6 +230,32 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputUrl.trim()) return;
+
+    // Kiểm tra Decoupled Consent yt-dlp (Mục 3.2 Chiến lược Thương mại)
+    const hasConsent = localStorage.getItem("adaptive_ytdlp_consent") === "true";
+    if (!hasConsent) {
+      setShowYtDlpConsent(true);
+      return;
+    }
+
+    await executeAddYouTube(inputUrl.trim());
+  };
+
+  const handleConsentConfirm = async () => {
+    localStorage.setItem("adaptive_ytdlp_consent", "true");
+    setShowYtDlpConsent(false);
+    if (inputUrl.trim()) {
+      await executeAddYouTube(inputUrl.trim());
+    }
+  };
+
+  const handleConsentCancel = () => {
+    setShowYtDlpConsent(false);
   };
 
   const handleSyncClick = async () => {
@@ -1003,6 +1030,13 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
           })
         )}
       </div>
+
+      {/* Hộp thoại Decoupled Consent yt-dlp */}
+      <YtDlpConsentModal
+        isOpen={showYtDlpConsent}
+        onConsent={handleConsentConfirm}
+        onCancel={handleConsentCancel}
+      />
     </div>
   );
 };
