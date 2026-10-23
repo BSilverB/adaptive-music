@@ -603,93 +603,32 @@ export class AdaptiveEngine {
       return;
     }
 
-    const now = this.audioCtx.currentTime;
-    const crossfadeDuration = 7.5; // 7.5 giây chuyển bài studio
-
-    // 1. Áp dụng hiệu ứng Lowpass Filter quét mờ & Fade-out bài cũ (Outro)
-    if (this.rhythmFilter) {
-      this.rhythmFilter.frequency.cancelScheduledValues(now);
-      this.rhythmFilter.frequency.exponentialRampToValueAtTime(250, now + crossfadeDuration);
+    // 1. Fade-out nhanh mượt mà bài cũ trong 0.8s
+    try {
+      if (this.masterGain && this.audioCtx.state === "running") {
+        const now = this.audioCtx.currentTime;
+        this.masterGain.gain.cancelScheduledValues(now);
+        this.masterGain.gain.setValueAtTime(this.masterGain.gain.value, now);
+        this.masterGain.gain.linearRampToValueAtTime(0.01, now + 0.8);
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      }
+    } catch {
+      // ignore
     }
-    if (this.masterGain) {
+
+    // 2. Dừng triệt để toàn bộ nguồn phát cũ để TUYỆT ĐỐI KHÔNG chồng âm thanh
+    this.stopSources();
+
+    // 3. Khởi chạy bài mới sạch sẽ từ mốc 0:00
+    await this.playTrack(nextTrack, 0);
+
+    // 4. Fade-in nhẹ 0.4s cho bài mới
+    if (this.masterGain && this.audioCtx && this.audioCtx.state === "running") {
+      const now = this.audioCtx.currentTime;
       this.masterGain.gain.cancelScheduledValues(now);
-      this.masterGain.gain.linearRampToValueAtTime(0.0, now + crossfadeDuration);
+      this.masterGain.gain.setValueAtTime(0.01, now);
+      this.masterGain.gain.linearRampToValueAtTime(1.0, now + 0.4);
     }
-
-    // Lưu lại old references để ngắt kết nối an toàn sau khi outro hoàn tất
-    const oldSources = { ...this.sources };
-    const oldOrig = this.origSource;
-    const oldMaster = this.masterGain;
-    const oldFilter = this.rhythmFilter;
-
-    // 2. Chuẩn bị buffers bài mới
-    let nextBuffers: Record<StemType, AudioBuffer | null> | null = null;
-    let nextOrigBuffer: AudioBuffer | null = null;
-
-    if (this.preloadedTrackId === nextTrack.id) {
-      nextBuffers = this.preloadedBuffers;
-      nextOrigBuffer = this.preloadedOriginalBuffer;
-      this.preloadedTrackId = null;
-      this.preloadedBuffers = null;
-      this.preloadedOriginalBuffer = null;
-    }
-
-    if (nextTrack.has_stems) {
-      if (!nextBuffers || !nextBuffers.vocals || !nextBuffers.other || !nextBuffers.bass || !nextBuffers.drums) {
-        const [vocals, other, bass, drums] = await Promise.all([
-          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${nextTrack.id}/audio/vocals`),
-          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${nextTrack.id}/audio/other`),
-          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${nextTrack.id}/audio/bass`),
-          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${nextTrack.id}/audio/drums`),
-        ]);
-        nextBuffers = { vocals, other, bass, drums };
-      }
-      this.buffers = nextBuffers;
-    } else {
-      if (!nextOrigBuffer) {
-        nextOrigBuffer = await this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${nextTrack.id}/audio/original`);
-      }
-      this.originalBuffer = nextOrigBuffer;
-    }
-
-    this.currentTrack = nextTrack;
-    this.currentTrackId = nextTrack.id;
-    this.pausedAtOffset = 0;
-
-    // 3. Khởi chạy bài mới gối đầu với Fade-in mượt mà
-    if (nextTrack.has_stems) {
-      this.startStemsPlayback(0);
-      if (this.masterGain) {
-        this.masterGain.gain.setValueAtTime(0.0, this.audioCtx.currentTime);
-        this.masterGain.gain.linearRampToValueAtTime(1.0, this.audioCtx.currentTime + 2.0);
-      }
-    } else {
-      this.startFallbackPlayback(0);
-      if (this.masterGain) {
-        this.masterGain.gain.setValueAtTime(0.0, this.audioCtx.currentTime);
-        this.masterGain.gain.linearRampToValueAtTime(1.0, this.audioCtx.currentTime + 2.0);
-      }
-    }
-
-    // 4. Giải phóng tài nguyên bài cũ sau khi outro tắt hẳn
-    setTimeout(() => {
-      try {
-        oldSources.vocals?.stop();
-        oldSources.other?.stop();
-        oldSources.bass?.stop();
-        oldSources.drums?.stop();
-        oldOrig?.stop();
-      } catch { /* ignore */ }
-      oldSources.vocals?.disconnect();
-      oldSources.other?.disconnect();
-      oldSources.bass?.disconnect();
-      oldSources.drums?.disconnect();
-      oldOrig?.disconnect();
-      oldMaster?.disconnect();
-      oldFilter?.disconnect();
-    }, crossfadeDuration * 1000 + 100);
-
-    this.notifyListeners();
   }
 
   // --- BINAURAL SPATIAL 8D CONTROLS & LOGIC ---
@@ -922,6 +861,7 @@ export class AdaptiveEngine {
     const mySessionId = ++this.playSessionId;
     this.currentTrack = track;
     this.pausedAtOffset = offsetSec;
+    this.playbackStartTime = this.audioCtx ? this.audioCtx.currentTime - offsetSec : 0;
 
     // Giải phóng buffer cũ hoặc tái sử dụng từ preload
     if (this.currentTrackId !== track.id) {
@@ -1305,7 +1245,12 @@ export class AdaptiveEngine {
     this.masterAnalyser?.disconnect();
     this.masterAnalyser = null;
     this.origSource = null;
+    this.rhythmFilter?.disconnect();
     this.rhythmFilter = null;
+    this.fallbackFilter?.disconnect();
+    this.fallbackFilter = null;
+    this.masterGain?.disconnect();
+    this.masterGain = null;
     this.stopSpatialLoop();
     this.pannerMelody?.disconnect();
     this.pannerMelody = null;
@@ -1318,6 +1263,7 @@ export class AdaptiveEngine {
     if (!this.audioCtx) return 0;
     if (this.isPaused) return this.pausedAtOffset;
     if (!this.isPlaying) return 0;
+    if (this.playbackStartTime === 0) return this.pausedAtOffset;
     return Math.max(0, this.audioCtx.currentTime - this.playbackStartTime);
   }
 

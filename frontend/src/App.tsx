@@ -118,6 +118,7 @@ export function App() {
   } = useFlowAnalytics(isPlaying, currentTrack, activity);
 
   const isTransitioningRef = useRef<boolean>(false);
+  const isSwitchingTrackRef = useRef<boolean>(false);
   const preloadedTrackIdRef = useRef<string | null>(null);
 
   // Shuffle & Repeat states
@@ -253,12 +254,20 @@ export function App() {
 
   const handlePlayTrack = async (track: TrackMeta) => {
     if (!engineReady) handleInitializeEngine();
+    isSwitchingTrackRef.current = true;
     isTransitioningRef.current = false;
     setIsTransitioning(false);
     preloadedTrackIdRef.current = null;
+    setCurrentTime(0);
     setCurrentTrack(track);
     setIsPlaying(true);
-    await adaptiveEngine.playTrack(track, 0);
+    try {
+      await adaptiveEngine.playTrack(track, 0);
+    } finally {
+      setTimeout(() => {
+        isSwitchingTrackRef.current = false;
+      }, 1000);
+    }
   };
 
   const handlePauseTrack = () => {
@@ -274,46 +283,58 @@ export function App() {
   // Chuyển sang bài tiếp theo (Next)
   const playNextTrack = useCallback(
     async (autoTriggered = false, isDJCrossfade = false) => {
-      const queueList = isShuffle ? shuffledTrackIds : currentPlaylist.track_ids;
-      if (queueList.length === 0) return;
+      if (isSwitchingTrackRef.current) return;
+      isSwitchingTrackRef.current = true;
 
-      // Xử lý Repeat One khi bài hát chạy hết
-      if (repeatMode === "one" && autoTriggered && currentTrack) {
-        adaptiveEngine.playTrack(currentTrack, 0);
-        setIsPlaying(true);
-        return;
-      }
+      try {
+        const queueList = isShuffle ? shuffledTrackIds : currentPlaylist.track_ids;
+        if (queueList.length === 0) return;
 
-      const currentIdx = currentTrack ? queueList.indexOf(currentTrack.id) : -1;
-      let nextIdx = currentIdx + 1;
-
-      if (nextIdx >= queueList.length) {
-        if (repeatMode === "all") {
-          nextIdx = 0; // Tự động quay lại từ đầu playlist
-        } else {
-          // repeatMode === "off" -> dừng lại khi hết danh sách
-          adaptiveEngine.stop();
-          setIsPlaying(false);
+        // Xử lý Repeat One khi bài hát chạy hết
+        if (repeatMode === "one" && autoTriggered && currentTrack) {
+          setCurrentTime(0);
+          await adaptiveEngine.playTrack(currentTrack, 0);
+          setIsPlaying(true);
           return;
         }
-      }
 
-      const nextId = queueList[nextIdx];
-      const nextTrack = tracksMap.get(nextId);
-      if (nextTrack) {
-        if (isDJCrossfade) {
-          isTransitioningRef.current = true;
-          setIsTransitioning(true);
+        const currentIdx = currentTrack ? queueList.indexOf(currentTrack.id) : -1;
+        let nextIdx = currentIdx + 1;
+
+        if (nextIdx >= queueList.length) {
+          if (repeatMode === "all") {
+            nextIdx = 0; // Tự động quay lại từ đầu playlist
+          } else {
+            // repeatMode === "off" -> dừng lại khi hết danh sách
+            adaptiveEngine.stop();
+            setCurrentTime(0);
+            setIsPlaying(false);
+            return;
+          }
+        }
+
+        const nextId = queueList[nextIdx];
+        const nextTrack = tracksMap.get(nextId);
+        if (nextTrack) {
+          setCurrentTime(0);
           setCurrentTrack(nextTrack);
           setIsPlaying(true);
-          await adaptiveEngine.playWithDJCrossfade(nextTrack);
-          setTimeout(() => {
+          preloadedTrackIdRef.current = null;
+
+          if (isDJCrossfade && djCrossfade) {
+            isTransitioningRef.current = true;
+            setIsTransitioning(true);
+            await adaptiveEngine.playWithDJCrossfade(nextTrack);
             isTransitioningRef.current = false;
             setIsTransitioning(false);
-          }, 8000);
-        } else {
-          handlePlayTrack(nextTrack);
+          } else {
+            await adaptiveEngine.playTrack(nextTrack, 0);
+          }
         }
+      } finally {
+        setTimeout(() => {
+          isSwitchingTrackRef.current = false;
+        }, 1200);
       }
     },
     [
@@ -323,11 +344,13 @@ export function App() {
       repeatMode,
       currentTrack,
       tracksMap,
+      djCrossfade,
     ]
   );
 
   // Chuyển sang bài trước đó (Prev)
   const playPrevTrack = useCallback(() => {
+    if (isSwitchingTrackRef.current) return;
     const queueList = isShuffle ? shuffledTrackIds : currentPlaylist.track_ids;
     if (queueList.length === 0) return;
 
@@ -347,7 +370,9 @@ export function App() {
   // Hook sự kiện bài hát chạy hết để tự động phát tiếp
   useEffect(() => {
     adaptiveEngine.setOnTrackEnded(() => {
-      playNextTrack(true);
+      if (!isSwitchingTrackRef.current) {
+        playNextTrack(true, false);
+      }
     });
   }, [playNextTrack]);
 
@@ -358,10 +383,11 @@ export function App() {
       const cur = adaptiveEngine.getCurrentTime();
       setCurrentTime(cur);
 
-      if (!currentTrack || currentTrack.duration < 20) return;
+      if (!currentTrack || currentTrack.duration < 10) return;
+      if (isSwitchingTrackRef.current) return;
 
       const queueList = isShuffle ? shuffledTrackIds : currentPlaylist.track_ids;
-      if (queueList.length <= 1) return;
+      if (queueList.length <= 1 && repeatMode !== "one") return;
 
       const currentIdx = queueList.indexOf(currentTrack.id);
       let nextIdx = currentIdx + 1;
@@ -374,20 +400,31 @@ export function App() {
 
       const remaining = currentTrack.duration - cur;
 
-      // 1. Tải trước (Preload) bài tiếp theo khi còn 15 giây
-      if (remaining <= 15.0 && preloadedTrackIdRef.current !== nextTrack.id) {
+      // 1. Tải trước (Preload) bài tiếp theo khi còn 12 giây
+      if (cur >= 4.0 && remaining > 0 && remaining <= 12.0 && preloadedTrackIdRef.current !== nextTrack.id) {
         preloadedTrackIdRef.current = nextTrack.id;
         adaptiveEngine.preloadTrack(nextTrack);
       }
 
-      // 2. Kích hoạt DJ Crossfade hòa nhịp khi còn 8.5 giây
+      // 2. Kích hoạt DJ Crossfade hòa nhịp khi còn 2.0 giây (bài phải phát ít nhất 5s)
       if (
-        remaining <= 8.5 &&
-        !isTransitioningRef.current &&
+        cur >= 5.0 &&
+        remaining > 0 &&
+        remaining <= 2.0 &&
+        !isSwitchingTrackRef.current &&
         djCrossfade &&
         repeatMode !== "one"
       ) {
         playNextTrack(true, true);
+      }
+      // 3. Fallback: Nếu bài đã chạy hết thời lượng mà không bật DJ Crossfade
+      else if (
+        cur >= 5.0 &&
+        remaining <= 0 &&
+        !isSwitchingTrackRef.current &&
+        !djCrossfade
+      ) {
+        playNextTrack(true, false);
       }
     }, 250);
 
