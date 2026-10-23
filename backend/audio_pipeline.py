@@ -57,39 +57,86 @@ def fetch_real_track_info(video_id: str, audio_path: Optional[str] = None) -> Tu
 
     return title, duration
 
+def find_ffmpeg_path() -> Optional[str]:
+    """Tìm binary ffmpeg trên máy tính nếu có"""
+    # 1. Thư mục cùng cấp với backend_engine.exe
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(sys.executable)
+        p = os.path.join(exe_dir, "ffmpeg.exe")
+        if os.path.exists(p):
+            return p
+    # 2. Thư mục AI Engine
+    ai_dir = os.path.join(
+        os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+        "AdaptiveFlow",
+        "ai_engine"
+    )
+    for sub in ["ffmpeg.exe", os.path.join("Scripts", "ffmpeg.exe"), os.path.join("bin", "ffmpeg.exe")]:
+        p = os.path.join(ai_dir, sub)
+        if os.path.exists(p):
+            return p
+    # 3. System PATH
+    p = shutil.which("ffmpeg")
+    if p:
+        return p
+    return None
+
+def find_ffprobe_path() -> Optional[str]:
+    """Tìm binary ffprobe trên máy tính nếu có"""
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(sys.executable)
+        p = os.path.join(exe_dir, "ffprobe.exe")
+        if os.path.exists(p):
+            return p
+    ai_dir = os.path.join(
+        os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+        "AdaptiveFlow",
+        "ai_engine"
+    )
+    for sub in ["ffprobe.exe", os.path.join("Scripts", "ffprobe.exe"), os.path.join("bin", "ffprobe.exe")]:
+        p = os.path.join(ai_dir, sub)
+        if os.path.exists(p):
+            return p
+    p = shutil.which("ffprobe")
+    if p:
+        return p
+    return None
+
 def extract_audio_metadata(file_path: str, fallback_title: str = "Unknown Track") -> Tuple[str, int]:
     """
-    Đọc siêu dữ liệu (Title, Artist, Duration) từ file âm thanh qua ffprobe chuẩn xác và siêu nhẹ (< 15ms).
+    Đọc siêu dữ liệu (Title, Artist, Duration) từ file âm thanh qua ffprobe nếu có, hoặc fallback an toàn không gây lỗi.
     """
     title = fallback_title
     duration = 0
-    try:
-        cmd = [
-            "ffprobe", "-v", "quiet",
-            "-print_format", "json",
-            "-show_format",
-            file_path
-        ]
-        creationflags = 0x00004000 if sys.platform == "win32" else 0
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=creationflags)
-        if res.returncode == 0:
-            data = json.loads(res.stdout)
-            fmt = data.get("format", {})
-            if "duration" in fmt:
-                try:
-                    duration = int(float(fmt["duration"]))
-                except Exception:
-                    pass
-            tags = fmt.get("tags", {})
-            tag_title = tags.get("title") or tags.get("TITLE") or tags.get("Title")
-            tag_artist = tags.get("artist") or tags.get("ARTIST") or tags.get("Artist")
-            if tag_title:
-                if tag_artist and tag_artist.lower() not in tag_title.lower():
-                    title = f"{tag_artist} - {tag_title}"
-                else:
-                    title = tag_title
-    except Exception as e:
-        print(f"[Metadata] Error reading ffprobe metadata: {e}")
+    ffprobe_cmd = find_ffprobe_path()
+    if ffprobe_cmd:
+        try:
+            cmd = [
+                ffprobe_cmd, "-v", "quiet",
+                "-print_format", "json",
+                "-show_format",
+                file_path
+            ]
+            creationflags = 0x00004000 if sys.platform == "win32" else 0
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=creationflags, timeout=5)
+            if res.returncode == 0:
+                data = json.loads(res.stdout)
+                fmt = data.get("format", {})
+                if "duration" in fmt:
+                    try:
+                        duration = int(float(fmt["duration"]))
+                    except Exception:
+                        pass
+                tags = fmt.get("tags", {})
+                tag_title = tags.get("title") or tags.get("TITLE") or tags.get("Title")
+                tag_artist = tags.get("artist") or tags.get("ARTIST") or tags.get("Artist")
+                if tag_title:
+                    if tag_artist and tag_artist.lower() not in tag_title.lower():
+                        title = f"{tag_artist} - {tag_title}"
+                    else:
+                        title = tag_title
+        except Exception as e:
+            print(f"[Metadata] Error reading ffprobe metadata: {e}")
 
     if duration == 0 and os.path.exists(file_path):
         try:
@@ -572,23 +619,43 @@ class AudioPipeline:
         base_name, _ = os.path.splitext(original_filename)
         fallback_title = base_name.strip() if base_name.strip() else f"Local Track {track_hash}"
 
-        # Chuyển đổi sang original.mp3 nếu chưa tồn tại
+        # Chuyển đổi hoặc sao chép file gốc an toàn (Không phụ thuộc bắt buộc vào ffmpeg)
+        actual_original_file = original_mp3
         if not os.path.exists(original_mp3) or os.path.getsize(original_mp3) == 0:
-            cmd = [
-                "ffmpeg", "-y", "-i", temp_path,
-                "-vn", "-ar", "44100", "-ac", "2", "-b:a", "192k",
-                original_mp3
-            ]
-            creationflags = 0x00004000 if sys.platform == "win32" else 0
-            conv_res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=creationflags)
-            if conv_res.returncode != 0:
-                if temp_path.lower().endswith(".mp3"):
-                    shutil.copy2(temp_path, original_mp3)
-                else:
-                    raise RuntimeError(f"FFmpeg chuyển đổi thất bại: {conv_res.stderr.decode('utf-8', errors='ignore')[-300:]}")
+            # 1. Nếu file đã là .mp3, copy trực tiếp 100% native Python (Không cần ffmpeg)
+            if temp_path.lower().endswith(".mp3"):
+                shutil.copy2(temp_path, original_mp3)
+                actual_original_file = original_mp3
+            else:
+                # 2. Nếu file khác định dạng (wav, m4a, flac...), thử dùng ffmpeg nếu hệ thống có
+                ffmpeg_cmd = find_ffmpeg_path()
+                converted = False
+                if ffmpeg_cmd:
+                    try:
+                        cmd = [
+                            ffmpeg_cmd, "-y", "-i", temp_path,
+                            "-vn", "-ar", "44100", "-ac", "2", "-b:a", "192k",
+                            original_mp3
+                        ]
+                        creationflags = 0x00004000 if sys.platform == "win32" else 0
+                        conv_res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=creationflags, timeout=30)
+                        if conv_res.returncode == 0 and os.path.exists(original_mp3) and os.path.getsize(original_mp3) > 0:
+                            converted = True
+                            actual_original_file = original_mp3
+                    except Exception as e:
+                        print(f"[Process Local] Warning during ffmpeg conversion: {e}")
 
-        # Đọc metadata qua ffprobe
-        title, duration = extract_audio_metadata(original_mp3, fallback_title)
+                # 3. Fallback: Nếu không có ffmpeg, copy giữ nguyên đuôi gốc (Chromium/Electron hỗ trợ giải mã trực tiếp)
+                if not converted:
+                    _, orig_ext = os.path.splitext(temp_path)
+                    if not orig_ext:
+                        orig_ext = ".mp3"
+                    fallback_file = os.path.join(track_dir, f"original{orig_ext.lower()}")
+                    shutil.copy2(temp_path, fallback_file)
+                    actual_original_file = fallback_file
+
+        # Đọc metadata qua ffprobe (nếu có) hoặc fallback an toàn
+        title, duration = extract_audio_metadata(actual_original_file, fallback_title)
 
         status = "READY" if has_stems else ("WAITING_COLAB" if self.engine_mode == "COLAB_BATCH" else "QUEUED")
         track_data = {
@@ -598,7 +665,7 @@ class AudioPipeline:
             "thumbnail": "",
             "status": status,
             "has_stems": has_stems,
-            "original_path": original_mp3,
+            "original_path": actual_original_file,
             "source": "local",
             "cache_hit": cache_hit
         }
@@ -608,11 +675,12 @@ class AudioPipeline:
         # Đồng bộ sang Colab hoặc Local Demucs nếu chưa có stems
         if not has_stems:
             if self.engine_mode == "COLAB_BATCH":
-                input_drive_file = os.path.join(self.drive_sync_dir, "01_Input_Audio", f"{track_id}.mp3")
+                _, ext = os.path.splitext(actual_original_file)
+                input_drive_file = os.path.join(self.drive_sync_dir, "01_Input_Audio", f"{track_id}{ext}")
                 if not os.path.exists(input_drive_file):
                     try:
-                        shutil.copy2(original_mp3, input_drive_file)
-                        print(f"[Colab Batch] Uploaded local file {track_id}.mp3 to 01_Input_Audio/")
+                        shutil.copy2(actual_original_file, input_drive_file)
+                        print(f"[Colab Batch] Uploaded local file {track_id}{ext} to 01_Input_Audio/")
                     except Exception as e:
                         print(f"[Colab Batch] Failed to upload local file to Drive: {e}")
             else:
@@ -736,38 +804,59 @@ class AudioPipeline:
             track_dir = os.path.join(CACHE_DIR, video_id)
             os.makedirs(track_dir, exist_ok=True)
 
+            ffmpeg_cmd = find_ffmpeg_path()
             ydl_opts = {
-                "format": "bestaudio/best",
+                "format": "bestaudio[ext=m4a]/bestaudio/best",
                 "outtmpl": os.path.join(track_dir, "original.%(ext)s"),
-                "postprocessors": [{
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }],
                 "quiet": True,
                 "no_warnings": True,
             }
+            if ffmpeg_cmd:
+                ydl_opts["ffmpeg_location"] = ffmpeg_cmd
+                ydl_opts["postprocessors"] = [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }]
 
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=True)
 
-                original_mp3 = os.path.join(track_dir, "original.mp3")
-                print(f"[Download Worker] Successfully downloaded: {video_id}")
+                # Tìm file audio thực tế đã tải về
+                downloaded_orig = None
+                for candidate in ["original.mp3", "original.m4a", "original.webm", "original.opus"]:
+                    p = os.path.join(track_dir, candidate)
+                    if os.path.exists(p) and os.path.getsize(p) > 0:
+                        downloaded_orig = p
+                        break
+                if not downloaded_orig and os.path.exists(track_dir):
+                    for f in os.listdir(track_dir):
+                        if f.startswith("original.") and not f.endswith(".part"):
+                            p = os.path.join(track_dir, f)
+                            if os.path.getsize(p) > 0:
+                                downloaded_orig = p
+                                break
+
+                if not downloaded_orig:
+                    raise RuntimeError("Không tìm thấy file audio đã tải về từ YouTube.")
+
+                print(f"[Download Worker] Successfully downloaded: {video_id} -> {os.path.basename(downloaded_orig)}")
 
                 track = self.tracks.get(video_id)
                 if track:
-                    track["original_path"] = original_mp3
+                    track["original_path"] = downloaded_orig
                     if info.get("title"):
                         track["title"] = info["title"]
                     if info.get("duration"):
                         track["duration"] = info["duration"]
 
                     if self.engine_mode == "COLAB_BATCH":
-                        input_drive_file = os.path.join(self.drive_sync_dir, "01_Input_Audio", f"{video_id}.mp3")
+                        _, ext = os.path.splitext(downloaded_orig)
+                        input_drive_file = os.path.join(self.drive_sync_dir, "01_Input_Audio", f"{video_id}{ext}")
                         try:
-                            shutil.copy2(original_mp3, input_drive_file)
-                            print(f"[Colab Batch] Pushed {video_id}.mp3 to 01_Input_Audio/ on Drive")
+                            shutil.copy2(downloaded_orig, input_drive_file)
+                            print(f"[Colab Batch] Pushed {video_id}{ext} to 01_Input_Audio/ on Drive")
                         except Exception as e:
                             print(f"[Colab Batch] Failed to push file to Drive: {e}")
                         track["status"] = "WAITING_COLAB"

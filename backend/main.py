@@ -218,11 +218,41 @@ def api_stream_audio(track_id: str, stem_type: str):
 
     track_dir = os.path.join(CACHE_DIR, track_id)
 
+    def get_audio_media_type(filepath: str) -> str:
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext in [".m4a", ".aac", ".mp4"]:
+            return "audio/mp4"
+        elif ext in [".webm", ".opus", ".ogg"]:
+            return "audio/webm"
+        elif ext == ".wav":
+            return "audio/wav"
+        elif ext == ".flac":
+            return "audio/flac"
+        return "audio/mpeg"
+
+    def find_original_file() -> Optional[str]:
+        orig = track.get("original_path")
+        if orig and os.path.exists(orig) and os.path.getsize(orig) > 0:
+            return orig
+        for candidate in ["original.mp3", "original.m4a", "original.webm", "original.opus", "original.wav", "original.flac"]:
+            p = os.path.join(track_dir, candidate)
+            if os.path.exists(p) and os.path.getsize(p) > 0:
+                track["original_path"] = p
+                return p
+        if os.path.exists(track_dir):
+            for f in os.listdir(track_dir):
+                if f.startswith("original.") and not f.endswith(".part"):
+                    p = os.path.join(track_dir, f)
+                    if os.path.getsize(p) > 0:
+                        track["original_path"] = p
+                        return p
+        return None
+
     # Nếu yêu cầu bài gốc
     if stem_type == "original":
-        orig_file = track.get("original_path") or os.path.join(track_dir, "original.mp3")
-        if os.path.exists(orig_file):
-            return FileResponse(orig_file, media_type="audio/mpeg")
+        orig_file = find_original_file()
+        if orig_file:
+            return FileResponse(orig_file, media_type=get_audio_media_type(orig_file))
 
     # Nếu yêu cầu 1 trong 4 stems: vocals, other, bass, drums
     stem_file = os.path.join(track_dir, f"{stem_type}.mp3")
@@ -234,9 +264,9 @@ def api_stream_audio(track_id: str, stem_type: str):
         return FileResponse(os.path.join(track_dir, "other.mp3"), media_type="audio/mpeg")
 
     # Fallback về bài gốc nếu stem chưa sẵn sàng
-    orig_file = track.get("original_path") or os.path.join(track_dir, "original.mp3")
-    if os.path.exists(orig_file):
-        return FileResponse(orig_file, media_type="audio/mpeg")
+    orig_file = find_original_file()
+    if orig_file:
+        return FileResponse(orig_file, media_type=get_audio_media_type(orig_file))
 
     raise HTTPException(status_code=404, detail=f"File audio {stem_type} chưa sẵn sàng")
 

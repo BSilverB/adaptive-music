@@ -1,6 +1,6 @@
 {
   "name": "adaptive-flow-engine",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Standalone Neuro-Focus Audio Workstation & Player",
   "main": "electron/main.cjs",
   "scripts": {

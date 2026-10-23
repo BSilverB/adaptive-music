@@ -991,6 +991,11 @@ export class AdaptiveEngine {
       }
     } catch (err) {
       console.error(`[AudioEngine] Lỗi phát bài ${track.id}:`, err);
+      this.isPlaying = false;
+      this.isPaused = false;
+      this.currentTrack = null;
+      this.stopSources();
+      this.notifyListeners();
       return;
     }
 
