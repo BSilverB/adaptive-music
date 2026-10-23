@@ -166,10 +166,59 @@ class AIEngineManager:
 
     def _run_install_pipeline(self):
         try:
-            # Bước 1: Kiểm tra xem hệ thống có Python & pip không
+            # Tạo thư mục lưu trữ môi trường AI
+            os.makedirs(AI_ENGINE_DIR, exist_ok=True)
+            self.install_logs.append(f"AI Engine target directory: {AI_ENGINE_DIR}")
+
+            # Bước 1: Tự động tải công cụ FFmpeg độc lập nếu máy chưa có
+            target_ffmpeg = os.path.join(AI_ENGINE_DIR, "ffmpeg.exe")
+            target_ffprobe = os.path.join(AI_ENGINE_DIR, "ffprobe.exe")
+            if not os.path.exists(target_ffmpeg) and not shutil.which("ffmpeg"):
+                self._update_progress(10, "Đang tải bộ giải mã FFmpeg độc lập cho máy...")
+                self.install_logs.append("Fetching standalone FFmpeg package from GitHub...")
+                try:
+                    import urllib.request
+                    import zipfile
+                    import io
+
+                    url = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+                    req = urllib.request.Request(url, headers={"User-Agent": "AdaptiveFlowEngine/1.0"})
+                    with urllib.request.urlopen(req, timeout=45) as resp:
+                        total_size = int(resp.headers.get("content-length", 0))
+                        downloaded = 0
+                        chunks = []
+                        while True:
+                            chunk = resp.read(1048576)  # 1MB
+                            if not chunk:
+                                break
+                            chunks.append(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                pct = 10 + int((downloaded / total_size) * 25)
+                                self._update_progress(pct, f"Tải FFmpeg: {downloaded // 1048576}MB / {total_size // 1048576}MB...")
+
+                        data = b"".join(chunks)
+                        with zipfile.ZipFile(io.BytesIO(data)) as z:
+                            for name in z.namelist():
+                                if name.endswith("bin/ffmpeg.exe") or name.endswith("/ffmpeg.exe") or name == "ffmpeg.exe":
+                                    with open(target_ffmpeg, "wb") as f_out:
+                                        f_out.write(z.read(name))
+                                    self.install_logs.append(f"Installed FFmpeg: {target_ffmpeg}")
+                                elif name.endswith("bin/ffprobe.exe") or name.endswith("/ffprobe.exe") or name == "ffprobe.exe":
+                                    with open(target_ffprobe, "wb") as f_out:
+                                        f_out.write(z.read(name))
+                                    self.install_logs.append(f"Installed FFprobe: {target_ffprobe}")
+                    self.install_logs.append("FFmpeg & FFprobe tools ready in AI Engine directory.")
+                except Exception as ffmpeg_err:
+                    self.install_logs.append(f"FFmpeg auto-download notice: {ffmpeg_err} (proceeding)")
+            else:
+                self.install_logs.append("FFmpeg binary is already available on this machine.")
+
+            # Bước 2: Kiểm tra Python và cài đặt Demucs qua pip
+            self._update_progress(40, "Đang kiểm tra môi trường Python để cài đặt Demucs...")
             sys_python = shutil.which("python") or shutil.which("python3")
             if sys_python:
-                self._update_progress(15, f"Detected system Python: {sys_python}. Installing Demucs...")
+                self._update_progress(45, f"Phát hiện Python: {sys_python}. Đang cài đặt Demucs AI...")
                 cmd = [sys_python, "-m", "pip", "install", "--upgrade", "demucs"]
                 creationflags = 0x00004000 if sys.platform == "win32" else 0
                 process = subprocess.Popen(
@@ -187,9 +236,9 @@ class AIEngineManager:
                     if clean_line:
                         self.install_logs.append(clean_line)
                         if "Downloading" in clean_line:
-                            self._update_progress(min(self.install_progress + 5, 80), f"Downloading: {clean_line[:60]}...")
+                            self._update_progress(min(self.install_progress + 3, 85), f"Tải gói AI: {clean_line[:60]}...")
                         elif "Installing" in clean_line:
-                            self._update_progress(min(self.install_progress + 3, 90), f"Installing components...")
+                            self._update_progress(min(self.install_progress + 2, 95), "Đang biên dịch & cấu hình model AI...")
 
                 process.stdout.close()
                 process.wait()
@@ -197,25 +246,20 @@ class AIEngineManager:
                 if process.returncode == 0:
                     runner, r_type = self.get_demucs_runner()
                     if runner:
-                        self._finish_install(True, f"Demucs installed successfully ({r_type})!")
+                        self._finish_install(True, f"Môi trường Demucs AI đã sẵn sàng ({r_type})!")
                         return
-
-            # Bước 2: Tạo thư mục độc lập nếu cần
-            os.makedirs(AI_ENGINE_DIR, exist_ok=True)
-            self._update_progress(50, "Preparing isolated AI Engine environment...")
-            self.install_logs.append(f"AI Engine target folder: {AI_ENGINE_DIR}")
 
             # Đánh giá hoàn tất
             runner, r_type = self.get_demucs_runner()
             if runner:
-                self._finish_install(True, f"AI Engine is ready ({r_type})!")
+                self._finish_install(True, f"AI Engine đã sẵn sàng hoạt động ({r_type})!")
             else:
                 self._finish_install(
                     False,
-                    "Automated pip installation did not complete. Please use Colab or install Python & run 'pip install demucs'."
+                    "Chưa thể tự động cài đặt Demucs qua pip. Vui lòng cài đặt Python hoặc tiếp tục sử dụng chế độ mượn GPU Colab miễn phí."
                 )
         except Exception as e:
-            self._finish_install(False, f"Setup error: {str(e)}")
+            self._finish_install(False, f"Lỗi thiết lập: {str(e)}")
 
     def _update_progress(self, progress: int, message: str):
         with self._lock:
