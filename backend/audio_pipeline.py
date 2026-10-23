@@ -13,7 +13,11 @@ from typing import Dict, Any, List, Optional, Tuple
 import yt_dlp
 from pydub import AudioSegment
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 CACHE_DIR = os.path.join(BASE_DIR, "cache_stems")
 TRACKS_FILE = os.path.join(CACHE_DIR, "tracks.json")
 PLAYLISTS_FILE = os.path.join(CACHE_DIR, "playlists.json")

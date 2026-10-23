@@ -375,7 +375,8 @@ if __name__ == "__main__":
         "pid": os.getpid(),
         "created_at": time.time()
     }
-    port_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "active_port.json")
+    base_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+    port_file = os.path.join(base_dir, "active_port.json")
     try:
         with open(port_file, "w", encoding="utf-8") as pf:
             json.dump(port_info, pf, indent=2)
