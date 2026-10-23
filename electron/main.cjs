@@ -1,13 +1,30 @@
 const net = require("net");
 const path = require("path");
 const http = require("http");
-const { app, BrowserWindow, shell } = require("electron");
+const fs = require("fs");
+const { app, BrowserWindow, shell, dialog } = require("electron");
 const { spawn, execSync } = require("child_process");
 
 let mainWindow = null;
 let pythonProcess = null;
 let currentPort = null;
 let isQuitting = false;
+let backendOutputLogs = [];
+
+// Đường dẫn file nhật ký khởi động để chẩn đoán lỗi
+const logDir = path.join(app.getPath("userData") || app.getPath("temp"), "AdaptiveFlowLogs");
+try {
+  fs.mkdirSync(logDir, { recursive: true });
+} catch (e) {}
+const logFilePath = path.join(logDir, "startup_debug.log");
+
+function log(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}\n`;
+  try {
+    fs.appendFileSync(logFilePath, line, "utf8");
+  } catch (e) {}
+  console.log(msg);
+}
 
 // 1. Quét tìm Port còn trống (Dynamic Port Finder từ 8000 đến 8050)
 function getFreePort(startPort = 8000, maxAttempts = 50) {
@@ -18,7 +35,6 @@ function getFreePort(startPort = 8000, maxAttempts = 50) {
         return;
       }
       const server = net.createServer();
-      server.unref();
       server.on("error", () => {
         tryPort(p + 1);
       });
@@ -39,9 +55,8 @@ function killPythonProcess() {
 
   if (pythonProcess && pythonProcess.pid) {
     const pid = pythonProcess.pid;
-    console.log(`[Electron] Đang tắt tiến trình Python Backend (PID: ${pid})...`);
+    log(`[Electron] Đang tắt tiến trình Python Backend (PID: ${pid})...`);
 
-    // Gửi tín hiệu shutdown HTTP endpoint trước
     if (currentPort) {
       try {
         const req = http.request({
@@ -53,12 +68,9 @@ function killPythonProcess() {
         });
         req.on("error", () => {});
         req.end();
-      } catch (e) {
-        // bỏ qua
-      }
+      } catch (e) {}
     }
 
-    // Windows Taskkill tree-kill để đảm bảo tất cả process con bị hạ gục
     setTimeout(() => {
       try {
         if (process.platform === "win32") {
@@ -66,34 +78,45 @@ function killPythonProcess() {
         } else {
           pythonProcess.kill("SIGKILL");
         }
-      } catch (e) {
-        // Tiến trình đã thoát
-      }
+      } catch (e) {}
       pythonProcess = null;
-      console.log(`[Electron] Python backend đã tắt hoàn toàn.`);
+      log(`[Electron] Python backend đã tắt hoàn toàn.`);
     }, 400);
   }
 }
 
-// 3. Healthcheck chờ backend sẵn sàng trước khi nạp giao diện
-function waitForBackend(port, timeoutMs = 20000) {
+// 3. Healthcheck chờ backend sẵn sàng
+function waitForBackend(port, timeoutMs = 25000) {
   const startTime = Date.now();
   return new Promise((resolve, reject) => {
-    const interval = setInterval(() => {
+    let checkInterval = null;
+
+    const cleanup = () => {
+      if (checkInterval) clearInterval(checkInterval);
+    };
+
+    checkInterval = setInterval(() => {
+      if (!pythonProcess) {
+        cleanup();
+        return reject(new Error("Tiến trình Backend đã bị hủy trước khi hoàn tất khởi động."));
+      }
+
       const req = http.get(`http://127.0.0.1:${port}/api/system-profile`, (res) => {
         if (res.statusCode === 200) {
-          clearInterval(interval);
+          cleanup();
           resolve(true);
         }
       });
+
       req.on("error", () => {
         if (Date.now() - startTime > timeoutMs) {
-          clearInterval(interval);
-          reject(new Error(`Backend healthcheck timeout sau ${timeoutMs}ms`));
+          cleanup();
+          const recentLogs = backendOutputLogs.slice(-15).join("\n");
+          reject(new Error(`Backend healthcheck timeout sau ${timeoutMs / 1000}s tại port ${port}.\n\nChi tiết log:\n${recentLogs}`));
         }
       });
       req.end();
-    }, 350);
+    }, 400);
   });
 }
 
@@ -111,7 +134,7 @@ async function createWindow(port) {
       preload: path.join(__dirname, "preload.cjs"),
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false, // Cho phép fetch local audio/blob từ backend
+      webSecurity: false,
     },
   });
 
@@ -123,7 +146,6 @@ async function createWindow(port) {
     await mainWindow.loadFile(distIndex, { query: { port: String(port) } });
   }
 
-  // Mở link ngoài bằng trình duyệt mặc định
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
@@ -137,31 +159,31 @@ async function createWindow(port) {
 
 // 5. Khởi động ứng dụng Electron
 app.whenReady().then(async () => {
+  log(`=== KHỞI ĐỘNG ỨNG DỤNG (isPackaged: ${app.isPackaged}) ===`);
   try {
     currentPort = await getFreePort(8000);
     process.env.BACKEND_PORT = String(currentPort);
-    console.log(`[Electron] Tìm thấy Port khả dụng: ${currentPort}`);
+    log(`[Electron] Đã chọn Port: ${currentPort}`);
 
-    // Hỗ trợ cả môi trường dev và packaged (.exe)
     const backendDir = app.isPackaged
       ? path.join(process.resourcesPath, "backend")
       : path.join(__dirname, "..", "backend");
 
     const standaloneExe = path.join(backendDir, "backend_engine.exe");
     const backendScript = path.join(backendDir, "main.py");
-    const fs = require("fs");
 
     let spawnCmd, spawnArgs;
     if (fs.existsSync(standaloneExe)) {
-      console.log(`[Electron] Khởi chạy Backend Engine độc lập: ${standaloneExe}`);
+      log(`[Electron] Phát hiện Backend Engine độc lập: ${standaloneExe}`);
       spawnCmd = standaloneExe;
       spawnArgs = ["--port", String(currentPort), "--watchdog"];
     } else {
-      console.log(`[Electron] Khởi chạy Python hệ thống: python ${backendScript}`);
+      log(`[Electron] Sử dụng Python hệ thống: python ${backendScript}`);
       spawnCmd = "python";
       spawnArgs = ["-u", backendScript, "--port", String(currentPort), "--watchdog"];
     }
 
+    log(`[Electron] Chuẩn bị spawn: "${spawnCmd}"`);
     pythonProcess = spawn(spawnCmd, spawnArgs, {
       cwd: backendDir,
       stdio: "pipe",
@@ -169,27 +191,50 @@ app.whenReady().then(async () => {
     });
 
     pythonProcess.stdout.on("data", (data) => {
-      console.log(`[Backend] ${data.toString().trim()}`);
+      const msg = data.toString().trim();
+      backendOutputLogs.push(`[STDOUT] ${msg}`);
+      log(`[Backend] ${msg}`);
     });
 
     pythonProcess.stderr.on("data", (data) => {
-      console.error(`[Backend ERR] ${data.toString().trim()}`);
+      const msg = data.toString().trim();
+      backendOutputLogs.push(`[STDERR] ${msg}`);
+      log(`[Backend ERR] ${msg}`);
     });
 
-    pythonProcess.on("exit", (code) => {
-      console.log(`[Electron] Tiến trình Python thoát với mã: ${code}`);
+    pythonProcess.on("error", (err) => {
+      log(`[Backend Process Error] Không thể khởi chạy process: ${err.message}`);
+      dialog.showErrorBox(
+        "Lỗi Khởi Chạy Bộ Não Backend",
+        `Không thể thực thi tiến trình Backend (${spawnCmd}):\n\n${err.message}\n\nNguyên nhân có thể do Windows Defender hoặc Antivirus đã chặn file này.\nXem chi tiết tại:\n${logFilePath}`
+      );
+    });
+
+    pythonProcess.on("exit", (code, signal) => {
+      log(`[Backend Exit] Thoát với mã: ${code}, signal: ${signal}`);
+      if (code !== 0 && code !== null && !isQuitting) {
+        const errorSummary = backendOutputLogs.slice(-10).join("\n") || "Không có thông tin lỗi chi tiết.";
+        dialog.showErrorBox(
+          "Lỗi Tiến Trình Backend",
+          `Bộ não backend đã dừng đột ngột (Mã lỗi: ${code}).\n\nChi tiết log gần nhất:\n${errorSummary}\n\nVui lòng kiểm tra file nhật ký tại:\n${logFilePath}`
+        );
+      }
       if (mainWindow && !mainWindow.isDestroyed() && !isQuitting) {
         mainWindow.close();
       }
     });
 
-    console.log(`[Electron] Đang chờ Backend khởi tạo tại http://127.0.0.1:${currentPort}...`);
+    log(`[Electron] Đang chờ Backend phản hồi tại http://127.0.0.1:${currentPort}...`);
     await waitForBackend(currentPort);
-    console.log(`[Electron] Backend sẵn sàng! Đang mở cửa sổ ứng dụng...`);
+    log(`[Electron] Backend sẵn sàng! Đang mở cửa sổ chính...`);
 
     await createWindow(currentPort);
   } catch (err) {
-    console.error("[Electron] Lỗi khởi động:", err);
+    log(`[Electron Startup Catch] ${err.stack || err.message}`);
+    dialog.showErrorBox(
+      "Không Thể Mở Ứng Dụng",
+      `Ứng dụng không thể kết nối tới Backend sau 25 giây:\n\n${err.message}\n\nXem file log chẩn đoán tại:\n${logFilePath}`
+    );
     killPythonProcess();
     app.quit();
   }

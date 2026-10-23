@@ -23,7 +23,10 @@ TRACKS_FILE = os.path.join(CACHE_DIR, "tracks.json")
 PLAYLISTS_FILE = os.path.join(CACHE_DIR, "playlists.json")
 DELETED_TRACKS_FILE = os.path.join(CACHE_DIR, "deleted_tracks.json")
 
-os.makedirs(CACHE_DIR, exist_ok=True)
+try:
+    os.makedirs(CACHE_DIR, exist_ok=True)
+except Exception as e:
+    print(f"[Cache] Không thể tạo thư mục CACHE_DIR: {e}")
 
 def fetch_real_track_info(video_id: str, audio_path: Optional[str] = None) -> Tuple[str, int]:
     """
@@ -155,8 +158,11 @@ class AudioPipeline:
         return os.path.join(BASE_DIR, "sync_drive", "AdaptiveMusic_Sync")
 
     def _ensure_drive_folders(self) -> None:
-        for sub in ["01_Input_Audio", "02_Processed_Audio", "03_Output_Stems"]:
-            os.makedirs(os.path.join(self.drive_sync_dir, sub), exist_ok=True)
+        try:
+            for sub in ["01_Input_Audio", "02_Processed_Audio", "03_Output_Stems"]:
+                os.makedirs(os.path.join(self.drive_sync_dir, sub), exist_ok=True)
+        except Exception as e:
+            print(f"[Drive Sync] Không thể tạo thư mục sync: {e}")
 
     def set_drive_sync_dir(self, new_path: str) -> None:
         if new_path and os.path.exists(os.path.dirname(new_path)):
