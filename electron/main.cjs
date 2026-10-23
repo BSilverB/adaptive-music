@@ -130,7 +130,7 @@ async function createWindow(port) {
     minHeight: 700,
     backgroundColor: "#07090e",
     autoHideMenuBar: true,
-    title: "Adaptive Flow & Beat Engine",
+    title: `Adaptive Flow Engine v${app.getVersion()}`,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       nodeIntegration: false,

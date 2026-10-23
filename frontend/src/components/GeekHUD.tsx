@@ -11,9 +11,11 @@ interface GeekHUDProps {
   isSpeaking?: boolean;
   speechLevel?: number;
   flowRatio?: number;
+  hasUpdate?: boolean;
   onToggleMicDucking?: () => void;
   onOpenDevWrapped?: () => void;
   onOpenLegal?: () => void;
+  onOpenUpdateModal?: () => void;
 }
 
 export const GeekHUD: React.FC<GeekHUDProps> = ({
@@ -24,9 +26,11 @@ export const GeekHUD: React.FC<GeekHUDProps> = ({
   micDuckingEnabled = false,
   isSpeaking = false,
   flowRatio = 100,
+  hasUpdate = false,
   onToggleMicDucking,
   onOpenDevWrapped,
   onOpenLegal,
+  onOpenUpdateModal,
 }) => {
   const formatIdle = (sec: number) => {
     const m = Math.floor(sec / 60);
@@ -53,7 +57,23 @@ export const GeekHUD: React.FC<GeekHUDProps> = ({
           </span>
           <span className="font-bold text-cyan-400">ADAPTIVE FLOW</span>
           <span className="text-slate-600">//</span>
-          <span className="text-slate-400 font-mono text-[11px]">ENGINE v2.0</span>
+          <button
+            onClick={onOpenUpdateModal}
+            className={`group flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-mono font-bold transition-all cursor-pointer ${
+              hasUpdate
+                ? "bg-amber-950/80 border border-amber-500/60 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.5)] animate-pulse"
+                : "bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.3)] hover:border-cyan-400 hover:bg-cyan-900/60"
+            }`}
+            title={hasUpdate ? "Có bản cập nhật mới! Bấm để xem" : "Phiên bản hiện tại. Bấm để kiểm tra cập nhật"}
+          >
+            <span>v1.0.2</span>
+            {hasUpdate && (
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+              </span>
+            )}
+          </button>
         </div>
 
         {/* Geek HUD Metrics - Một hàng duy nhất (flex-nowrap), không bao giờ nhảy dòng */}
@@ -149,6 +169,22 @@ export const GeekHUD: React.FC<GeekHUDProps> = ({
               <span className="rounded bg-cyan-900/60 px-1 py-0.2 font-mono text-[9px] text-cyan-300 tabular-nums">
                 {flowRatio}%
               </span>
+            </button>
+          )}
+
+          {/* Update Modal Button */}
+          {onOpenUpdateModal && (
+            <button
+              onClick={onOpenUpdateModal}
+              className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] font-semibold transition-all shrink-0 active:scale-95 cursor-pointer ${
+                hasUpdate
+                  ? "border-amber-500/60 bg-amber-950/60 text-amber-300 animate-pulse shadow-[0_0_12px_rgba(245,158,11,0.4)] hover:border-amber-400"
+                  : "border-slate-800 bg-slate-900/80 hover:border-slate-700 hover:text-white text-slate-400"
+              }`}
+              title={hasUpdate ? "Có bản cập nhật mới khả dụng!" : "Kiểm tra phiên bản mới"}
+            >
+              <Sparkles className={`h-3 w-3 ${hasUpdate ? "text-amber-400" : "text-cyan-400"}`} />
+              <span className="hidden sm:inline">{hasUpdate ? "BẢN MỚI!" : "CẬP NHẬT"}</span>
             </button>
           )}
 

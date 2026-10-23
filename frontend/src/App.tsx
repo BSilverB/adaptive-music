@@ -20,6 +20,8 @@ import { PlaylistView } from "./components/PlaylistView";
 import { DevWrappedModal } from "./components/DevWrappedModal";
 import { LegalEulaModal } from "./components/LegalEulaModal";
 import { UploadQueuePanel, type UploadItem } from "./components/UploadQueuePanel";
+import { UpdateModal } from "./components/UpdateModal";
+import { checkGitHubUpdate, type UpdateInfo } from "./services/updateChecker";
 import { useDesktopSocket } from "./hooks/useDesktopSocket";
 import { useMeetingDucking } from "./hooks/useMeetingDucking";
 import { useFlowAnalytics } from "./hooks/useFlowAnalytics";
@@ -66,6 +68,29 @@ export function App() {
     }
   });
   const [isLegalModalOpen, setIsLegalModalOpen] = useState<boolean>(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState<boolean>(false);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState<boolean>(false);
+
+  const performCheckUpdate = useCallback(async (manual = false) => {
+    setIsCheckingUpdate(true);
+    const info = await checkGitHubUpdate();
+    setIsCheckingUpdate(false);
+    if (info) {
+      setUpdateInfo(info);
+      if (manual || info.hasUpdate) {
+        setIsUpdateModalOpen(true);
+      }
+    }
+  }, []);
+
+  // Tự động kiểm tra bản cập nhật mới sau 4 giây khởi động
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      performCheckUpdate(false);
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [performCheckUpdate]);
 
   const handleAcceptEula = () => {
     try {
@@ -713,9 +738,11 @@ export function App() {
         isSpeaking={isSpeaking}
         speechLevel={speechLevel}
         flowRatio={flowRatio}
+        hasUpdate={!!updateInfo?.hasUpdate}
         onToggleMicDucking={toggleMicDucking}
         onOpenDevWrapped={() => setIsDevWrappedOpen(true)}
         onOpenLegal={() => setIsLegalModalOpen(true)}
+        onOpenUpdateModal={() => performCheckUpdate(true)}
       />
 
       {/* 2. Banner Vượt rào Autoplay Policy (Nếu chưa click) */}
@@ -1018,6 +1045,15 @@ export function App() {
           isFirstRun={!isEulaAccepted}
           onAccept={handleAcceptEula}
           onClose={() => setIsLegalModalOpen(false)}
+        />
+
+        {/* 8. Modal Kiểm Tra & Thông Báo Cập Nhật (Update & Changelog) */}
+        <UpdateModal
+          isOpen={isUpdateModalOpen}
+          onClose={() => setIsUpdateModalOpen(false)}
+          updateInfo={updateInfo}
+          checking={isCheckingUpdate}
+          onRecheck={() => performCheckUpdate(true)}
         />
       </main>
     </div>
