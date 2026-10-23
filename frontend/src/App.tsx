@@ -147,7 +147,7 @@ export function App() {
     fetchPlaylists();
   }, [fetchTracks, fetchPlaylists, tracksCount, queue.tracks_version, queue.current_job, queue.queue_size]);
 
-  // Tự động cập nhật currentTrack nếu bài đang phát vừa được tách stems xong
+  // Tự động cập nhật currentTrack nếu bài đang phát vừa được tách stems xong (chỉ cập nhật metadata, KHÔNG tự động kích hoạt audio)
   useEffect(() => {
     if (currentTrack) {
       const updated = tracks.find((t) => t.id === currentTrack.id);
@@ -157,12 +157,9 @@ export function App() {
           updated.status !== currentTrack.status)
       ) {
         setCurrentTrack(updated);
-        if (updated.has_stems && !currentTrack.has_stems && isPlaying) {
-          adaptiveEngine.playTrack(updated, currentTime);
-        }
       }
     }
-  }, [tracks, currentTrack, isPlaying]);
+  }, [tracks]);
 
   // Playlist hiện tại đang active
   const currentPlaylist = useMemo(() => {

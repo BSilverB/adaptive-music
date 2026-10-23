@@ -526,13 +526,14 @@ class AudioPipeline:
         return synced_count
 
     def _drive_watcher_loop(self):
-        import time
         while True:
-            time.sleep(20)
+            # Quét nhanh 5 giây / lần nếu đang có bài chờ Colab xử lý, ngược lại quét mỗi 15 giây
+            interval = 5 if self.get_pending_colab_count() > 0 else 15
+            time.sleep(interval)
             try:
                 self.sync_from_drive()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[Drive Watcher] Error in background sync: {e}")
 
     def add_local_audio_file(self, temp_path: str, original_filename: str) -> Dict[str, Any]:
         """

@@ -118,6 +118,7 @@ export class AdaptiveEngine {
   private currentEnergy: number = 0.0;
   private currentTrack: TrackMeta | null = null;
   private fallbackMode: "lofi" | "full" = "lofi";
+  private playSessionId: number = 0;
 
   // Mixer Settings & State
   private mixerMode: MixerMode = "auto";
@@ -916,8 +917,9 @@ export class AdaptiveEngine {
 
   public async playTrack(track: TrackMeta, offsetSec: number = 0): Promise<void> {
     this.initContext();
-    this.stop();
+    this.stopSources();
 
+    const mySessionId = ++this.playSessionId;
     this.currentTrack = track;
     this.pausedAtOffset = offsetSec;
 
@@ -939,30 +941,57 @@ export class AdaptiveEngine {
     this.isPlaying = true;
     this.isPaused = false;
 
-    if (track.has_stems) {
-      // Tải và giải mã 4 Stems đồng thời
-      const needFetch = !this.buffers.vocals || !this.buffers.other || !this.buffers.bass || !this.buffers.drums;
-      if (needFetch) {
-        const [vocals, other, bass, drums] = await Promise.all([
-          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/vocals`),
-          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/other`),
-          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/bass`),
-          this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/drums`),
-        ]);
-        this.buffers.vocals = vocals;
-        this.buffers.other = other;
-        this.buffers.bass = bass;
-        this.buffers.drums = drums;
+    try {
+      if (track.has_stems) {
+        // Tải và giải mã 4 Stems đồng thời
+        const needFetch = !this.buffers.vocals || !this.buffers.other || !this.buffers.bass || !this.buffers.drums;
+        if (needFetch) {
+          const [vocals, other, bass, drums] = await Promise.all([
+            this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/vocals`),
+            this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/other`),
+            this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/bass`),
+            this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/drums`),
+          ]);
+
+          // Nếu trong lúc tải mạng, người dùng đã bấm dừng hoặc chuyển bài khác -> HỦY NGAY LẬP TỨC
+          if (this.playSessionId !== mySessionId || !this.isPlaying) {
+            console.log(`[AudioEngine] Hủy phát stem ${track.id} vì phiên phát đã bị thay đổi.`);
+            return;
+          }
+
+          this.buffers.vocals = vocals;
+          this.buffers.other = other;
+          this.buffers.bass = bass;
+          this.buffers.drums = drums;
+        }
+
+        // Kiểm tra lại phiên phát
+        if (this.playSessionId !== mySessionId || !this.isPlaying) return;
+
+        // Dừng triệt để tất cả nguồn âm thanh đang phát trước khi kích hoạt
+        this.stopSources();
+        this.startStemsPlayback(offsetSec);
+      } else {
+        // Chế độ Fallback Lo-Fi tức thời (bài gốc)
+        if (!this.originalBuffer) {
+          const orig = await this.fetchAndDecode(
+            `${getApiBaseUrl()}/api/tracks/${track.id}/audio/original`
+          );
+          if (this.playSessionId !== mySessionId || !this.isPlaying) {
+            console.log(`[AudioEngine] Hủy phát fallback ${track.id} vì phiên phát đã bị thay đổi.`);
+            return;
+          }
+          this.originalBuffer = orig;
+        }
+
+        if (this.playSessionId !== mySessionId || !this.isPlaying) return;
+
+        this.stopSources();
+        this.startFallbackPlayback(offsetSec);
       }
-      this.startStemsPlayback(offsetSec);
-    } else {
-      // Chế độ Fallback Lo-Fi tức thời (bài gốc)
-      if (!this.originalBuffer) {
-        this.originalBuffer = await this.fetchAndDecode(
-          `${getApiBaseUrl()}/api/tracks/${track.id}/audio/original`
-        );
-      }
-      this.startFallbackPlayback(offsetSec);
+    } catch (err) {
+      console.error(`[AudioEngine] Lỗi phát bài ${track.id}:`, err);
+      return;
     }
 
     this.notifyListeners();
@@ -1214,6 +1243,7 @@ export class AdaptiveEngine {
 
   public pause(): void {
     if (!this.audioCtx || !this.isPlaying || this.isPaused) return;
+    this.playSessionId++;
     this.pausedAtOffset = this.getCurrentTime();
     this.stopSources();
     this.isPaused = true;
@@ -1234,6 +1264,7 @@ export class AdaptiveEngine {
   }
 
   public stop(): void {
+    this.playSessionId++;
     this.stopSources();
     this.isPlaying = false;
     this.isPaused = false;
