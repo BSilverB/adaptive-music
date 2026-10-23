@@ -858,6 +858,23 @@ class AudioPipeline:
         bass_seg.export(os.path.join(track_dir, "bass.mp3"), format="mp3", bitrate="320k")
         drums_seg.export(os.path.join(track_dir, "drums.mp3"), format="mp3", bitrate="320k")
 
+        # Xuất metadata.json đồng nhất với chuẩn Colab
+        meta_file = os.path.join(track_dir, "metadata.json")
+        try:
+            meta_data = {
+                "video_id": video_id,
+                "title": track.get("title", ""),
+                "duration": track.get("duration", int(min_len / 1000)),
+                "bitrate": "320kbps",
+                "processed_by": f"Local Demucs ({self.device.upper()})",
+                "status": "READY",
+                "created_at": time.time()
+            }
+            with open(meta_file, "w", encoding="utf-8") as mf:
+                json.dump(meta_data, mf, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[Metadata] Error writing local metadata.json: {e}")
+
         shutil.rmtree(demucs_out_dir, ignore_errors=True)
 
     def process_track_local(self, track_id: str) -> Dict[str, Any]:
