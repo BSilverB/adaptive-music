@@ -187,7 +187,12 @@ app.whenReady().then(async () => {
     pythonProcess = spawn(spawnCmd, spawnArgs, {
       cwd: backendDir,
       stdio: "pipe",
-      env: { ...process.env, BACKEND_PORT: String(currentPort) },
+      env: {
+        ...process.env,
+        BACKEND_PORT: String(currentPort),
+        PYTHONIOENCODING: "utf-8",
+        PYTHONUTF8: "1",
+      },
     });
 
     pythonProcess.stdout.on("data", (data) => {

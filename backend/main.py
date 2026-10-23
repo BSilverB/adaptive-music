@@ -1,6 +1,16 @@
 import os
 import sys
 
+# Bắt buộc cấu hình UTF-8 cho stdout/stderr để tránh lỗi UnicodeEncodeError trên các máy Windows dùng codepage cp1252/cp437
+if sys.platform == "win32":
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # Đảm bảo thư mục backend luôn nằm trong sys.path dù chạy từ bất kỳ thư mục nào
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -381,7 +391,7 @@ if __name__ == "__main__":
         with open(port_file, "w", encoding="utf-8") as pf:
             json.dump(port_info, pf, indent=2)
     except Exception as e:
-        print(f"[Port] Lỗi ghi active_port.json: {e}")
+        print(f"[Port] Loi ghi active_port.json: {e}")
 
-    print(f"Khởi động Backend tại http://127.0.0.1:{port} (Session Token: {SESSION_TOKEN}, Watchdog: {WATCHDOG_ENABLED})")
+    print(f"[Backend Engine] Khoi dong tai http://127.0.0.1:{port} (Session Token: {SESSION_TOKEN}, Watchdog: {WATCHDOG_ENABLED})")
     uvicorn.run(app, host="127.0.0.1", port=port)
