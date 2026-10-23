@@ -32,6 +32,7 @@ import psutil
 from activity_monitor import ActivityMonitor
 from system_profiler import get_system_profile
 from audio_pipeline import audio_pipeline, CACHE_DIR
+from ai_engine_manager import ai_engine_manager
 
 app = FastAPI(title="Adaptive Flow & Beat Engine API", version="2.1.0")
 
@@ -97,6 +98,10 @@ class ActivePlaylistRequest(BaseModel):
 
 class UpdateTitleRequest(BaseModel):
     title: str
+
+class BatchActionRequest(BaseModel):
+    action: str  # "process_local" | "dispatch_colab"
+    track_ids: Optional[List[str]] = None
 
 @app.get("/api/auth/token")
 def get_session_token():
@@ -234,6 +239,32 @@ def api_stream_audio(track_id: str, stem_type: str):
         return FileResponse(orig_file, media_type="audio/mpeg")
 
     raise HTTPException(status_code=404, detail=f"File audio {stem_type} chưa sẵn sàng")
+
+@app.get("/api/system/demucs-status")
+def api_demucs_status():
+    return ai_engine_manager.get_status()
+
+@app.post("/api/system/install-demucs")
+def api_install_demucs():
+    return ai_engine_manager.start_install()
+
+@app.post("/api/tracks/{track_id}/process-local")
+def api_process_track_local(track_id: str):
+    res = audio_pipeline.process_track_local(track_id)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    return res
+
+@app.post("/api/tracks/{track_id}/dispatch-colab")
+def api_dispatch_track_colab(track_id: str):
+    res = audio_pipeline.dispatch_track_to_colab(track_id)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message"))
+    return res
+
+@app.post("/api/tracks/batch-action")
+def api_batch_action(req: BatchActionRequest):
+    return audio_pipeline.batch_action(req.action, req.track_ids)
 
 @app.post("/api/settings/engine-mode")
 def api_set_engine_mode(req: EngineModeRequest):

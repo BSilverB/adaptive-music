@@ -24,9 +24,13 @@ import {
   ListPlus,
   UploadCloud,
   FolderUp,
+  Zap,
+  Clock,
 } from "lucide-react";
 import type { TrackMeta, Playlist } from "../audio/AdaptiveEngine";
+import type { AIEngineState } from "../hooks/useDesktopSocket";
 import { YtDlpConsentModal } from "./YtDlpConsentModal";
+import { AIEngineModal } from "./AIEngineModal";
 
 const VALID_EXTENSIONS = [".mp3", ".wav", ".flac", ".m4a", ".ogg"];
 
@@ -127,6 +131,11 @@ interface PlaylistViewProps {
   onForceSync: () => Promise<void>;
   onUploadFiles: (files: File[]) => void;
   onUpdateTrackTitle: (trackId: string, newTitle: string) => Promise<void>;
+  aiEngine?: AIEngineState;
+  onProcessTrackLocal?: (trackId: string) => Promise<void>;
+  onDispatchTrackColab?: (trackId: string) => Promise<void>;
+  onBatchAction?: (action: "process_local" | "dispatch_colab", trackIds?: string[]) => Promise<void>;
+  onInstallDemucs?: () => Promise<void>;
 }
 
 export const PlaylistView: React.FC<PlaylistViewProps> = ({
@@ -159,6 +168,11 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
   onForceSync,
   onUploadFiles,
   onUpdateTrackTitle,
+  aiEngine,
+  onProcessTrackLocal,
+  onDispatchTrackColab,
+  onBatchAction,
+  onInstallDemucs,
 }) => {
   const [inputUrl, setInputUrl] = useState("");
   const [loading, setLoading] = useState(false);
@@ -190,6 +204,12 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
   // Decoupled yt-dlp Consent modal state
   const [showYtDlpConsent, setShowYtDlpConsent] = useState(false);
 
+  // 3 Tab Filter state: 'all' | 'ready' | 'pending'
+  const [filterTab, setFilterTab] = useState<"all" | "ready" | "pending">("all");
+  const [showAIModal, setShowAIModal] = useState<boolean>(false);
+  const [pendingTrackForLocal, setPendingTrackForLocal] = useState<string | null>(null);
+  const [isProcessingBatch, setIsProcessingBatch] = useState<boolean>(false);
+
   // Lấy playlist đang kích hoạt
   const activePlaylist =
     playlists.find((p) => p.id === activePlaylistId) ||
@@ -215,6 +235,68 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
   const unaddedTracks = allTracks.filter(
     (t) => !activePlaylist.track_ids.includes(t.id)
   );
+
+  const totalCount = currentPlaylistTracks.length;
+  const readyCount = currentPlaylistTracks.filter((t) => t.has_stems).length;
+  const pendingTracks = currentPlaylistTracks.filter((t) => !t.has_stems);
+  const pendingCount = pendingTracks.length;
+
+  const displayedTracks = currentPlaylistTracks.filter((t) => {
+    if (filterTab === "ready") return t.has_stems;
+    if (filterTab === "pending") return !t.has_stems;
+    return true;
+  });
+
+  const handleTriggerLocal = async (trackId: string) => {
+    if (!aiEngine?.installed) {
+      setPendingTrackForLocal(trackId);
+      setShowAIModal(true);
+      return;
+    }
+    if (onProcessTrackLocal) {
+      await onProcessTrackLocal(trackId);
+      setSuccessMsg("Đã đưa bài vào hàng đợi Local Demucs.");
+      setTimeout(() => setSuccessMsg(null), 4000);
+    }
+  };
+
+  const handleTriggerColab = async (trackId: string) => {
+    if (onDispatchTrackColab) {
+      await onDispatchTrackColab(trackId);
+      setSuccessMsg("Đã nạp file vào Google Drive (01_Input_Audio/) chờ Colab.");
+      setTimeout(() => setSuccessMsg(null), 4000);
+    }
+  };
+
+  const handleBatchLocal = async () => {
+    if (!aiEngine?.installed) {
+      setShowAIModal(true);
+      return;
+    }
+    if (onBatchAction) {
+      setIsProcessingBatch(true);
+      try {
+        await onBatchAction("process_local", pendingTracks.map((t) => t.id));
+        setSuccessMsg(`Đã đưa toàn bộ ${pendingCount} bài vào hàng đợi Local Demucs.`);
+        setTimeout(() => setSuccessMsg(null), 4000);
+      } finally {
+        setIsProcessingBatch(false);
+      }
+    }
+  };
+
+  const handleBatchColab = async () => {
+    if (onBatchAction) {
+      setIsProcessingBatch(true);
+      try {
+        await onBatchAction("dispatch_colab", pendingTracks.map((t) => t.id));
+        setSuccessMsg(`Đã đẩy toàn bộ ${pendingCount} bài lên Google Drive cho Colab.`);
+        setTimeout(() => setSuccessMsg(null), 4000);
+      } finally {
+        setIsProcessingBatch(false);
+      }
+    }
+  };
 
   const executeAddYouTube = async (url: string) => {
     setLoading(true);
@@ -825,16 +907,96 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
         </div>
       )}
 
-      {/* 5. Danh sách Tracks (Hỗ trợ Kéo-Thả + Mũi tên Lên/Xuống) */}
+      {/* 5. Bộ lọc Trạng thái bài hát: Tất cả | 4-Stems Sẵn Sàng | Chờ Tách Stems */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setFilterTab("all")}
+            className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              filterTab === "all"
+                ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <span>Tất cả</span>
+            <span className="rounded-full bg-slate-800 px-1.5 py-0.2 text-[10px] text-slate-300">
+              {totalCount}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setFilterTab("ready")}
+            className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              filterTab === "ready"
+                ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+            <span>4-Stems Sẵn Sàng</span>
+            <span className="rounded-full bg-emerald-950 border border-emerald-800/60 px-1.5 py-0.2 text-[10px] text-emerald-300">
+              {readyCount}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setFilterTab("pending")}
+            className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              filterTab === "pending"
+                ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <Clock className="h-3 w-3 text-amber-400" />
+            <span>Chờ Tách</span>
+            {pendingCount > 0 && (
+              <span className="rounded-full bg-amber-500 text-slate-950 font-bold px-1.5 py-0.2 text-[10px] animate-pulse">
+                {pendingCount}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Nút hành động hàng loạt khi có bài chờ tách */}
+        {pendingCount > 0 && (
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={handleBatchLocal}
+              disabled={isProcessingBatch}
+              className="flex items-center gap-1 rounded bg-cyan-950 border border-cyan-500/40 px-2.5 py-1 text-[10px] font-bold text-cyan-300 hover:bg-cyan-500 hover:text-slate-950 transition-all disabled:opacity-50"
+              title="Đưa toàn bộ bài chưa tách vào hàng đợi Local Demucs"
+            >
+              <Zap className="h-3 w-3" />
+              <span>TÁCH HẾT (LOCAL)</span>
+            </button>
+
+            <button
+              onClick={handleBatchColab}
+              disabled={isProcessingBatch}
+              className="flex items-center gap-1 rounded bg-amber-950 border border-amber-500/40 px-2.5 py-1 text-[10px] font-bold text-amber-300 hover:bg-amber-500 hover:text-slate-950 transition-all disabled:opacity-50"
+              title="Đẩy toàn bộ bài chưa tách sang Drive cho Colab"
+            >
+              <Cloud className="h-3 w-3" />
+              <span>ĐẨY HẾT (COLAB)</span>
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* 6. Danh sách Tracks (Hỗ trợ Kéo-Thả + Mũi tên Lên/Xuống) */}
       <div className="space-y-1.5 max-h-[380px] overflow-y-auto pr-1">
-        {currentPlaylistTracks.length === 0 ? (
+        {displayedTracks.length === 0 ? (
           <div className="py-8 text-center text-xs text-slate-500">
-            {activePlaylist.is_default
+            {filterTab === "pending"
+              ? "Tuyệt vời! Không có bài nào đang chờ tách."
+              : filterTab === "ready"
+              ? "Chưa có bài nào đã tách 4 stems."
+              : activePlaylist.is_default
               ? "Chưa có bài hát nào trong playlist. Hãy dán link YouTube để bắt đầu!"
               : "Danh sách này chưa có bài hát. Hãy bấm '➕ Thêm từ Thư viện' ở trên!"}
           </div>
         ) : (
-          currentPlaylistTracks.map((track, index) => {
+          displayedTracks.map((track, index) => {
             const isCurrent = currentTrack?.id === track.id;
             const isDragging = draggedIndex === index;
 
@@ -997,6 +1159,35 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
                   </div>
                 </div>
 
+                {/* Nút Hành Động Tách Nhanh Cho Bài Chưa Có Stems */}
+                {!track.has_stems && (
+                  <div className="flex items-center gap-1.5 mr-2">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleTriggerLocal(track.id);
+                      }}
+                      disabled={track.status === "PROCESSING"}
+                      className="flex items-center gap-1 rounded bg-cyan-950 border border-cyan-500/50 hover:bg-cyan-500 hover:text-slate-950 px-2 py-1 text-[10px] font-bold text-cyan-300 transition-all shadow-sm"
+                      title="Tách bài này bằng GPU/CPU máy tính"
+                    >
+                      <Zap className="h-3 w-3" />
+                      <span>LOCAL</span>
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleTriggerColab(track.id);
+                      }}
+                      className="flex items-center gap-1 rounded bg-amber-950 border border-amber-500/50 hover:bg-amber-500 hover:text-slate-950 px-2 py-1 text-[10px] font-bold text-amber-300 transition-all shadow-sm"
+                      title="Nạp bài này sang Google Drive để Colab tách"
+                    >
+                      <Cloud className="h-3 w-3" />
+                      <span>COLAB</span>
+                    </button>
+                  </div>
+                )}
+
                 {/* Nút Xóa / Gỡ bài */}
                 <div>
                   {activePlaylist.is_default ? (
@@ -1036,6 +1227,20 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
         isOpen={showYtDlpConsent}
         onConsent={handleConsentConfirm}
         onCancel={handleConsentCancel}
+      />
+
+      {/* Hộp thoại Cài Đặt Bộ Não Local AI */}
+      <AIEngineModal
+        isOpen={showAIModal}
+        onClose={() => setShowAIModal(false)}
+        aiEngine={aiEngine}
+        onStartInstall={async () => {
+          if (onInstallDemucs) await onInstallDemucs();
+        }}
+        onSwitchToColab={() => {
+          if (pendingTrackForLocal) handleTriggerColab(pendingTrackForLocal);
+          onSetEngineMode("COLAB_BATCH");
+        }}
       />
     </div>
   );

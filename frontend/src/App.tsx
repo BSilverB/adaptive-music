@@ -626,6 +626,55 @@ export function App() {
     [fetchTracks, fetchPlaylists]
   );
 
+  const handleProcessTrackLocal = useCallback(
+    async (trackId: string) => {
+      try {
+        await fetch(`${getApiBaseUrl()}/api/tracks/${trackId}/process-local`, { method: "POST" });
+        await fetchTracks();
+      } catch (err) {
+        console.error("Lỗi gửi bài sang Local Demucs:", err);
+      }
+    },
+    [fetchTracks]
+  );
+
+  const handleDispatchTrackColab = useCallback(
+    async (trackId: string) => {
+      try {
+        await fetch(`${getApiBaseUrl()}/api/tracks/${trackId}/dispatch-colab`, { method: "POST" });
+        await fetchTracks();
+      } catch (err) {
+        console.error("Lỗi gửi bài sang Colab:", err);
+      }
+    },
+    [fetchTracks]
+  );
+
+  const handleBatchAction = useCallback(
+    async (action: "process_local" | "dispatch_colab", trackIds?: string[]) => {
+      try {
+        await fetch(`${getApiBaseUrl()}/api/tracks/batch-action`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, track_ids: trackIds }),
+        });
+        await fetchTracks();
+      } catch (err) {
+        console.error("Lỗi thực hiện batch action:", err);
+      }
+    },
+    [fetchTracks]
+  );
+
+  const handleInstallDemucs = useCallback(async () => {
+    try {
+      const res = await fetch(`${getApiBaseUrl()}/api/system/install-demucs`, { method: "POST" });
+      return await res.json();
+    } catch (err) {
+      console.error("Lỗi bắt đầu cài đặt Demucs:", err);
+    }
+  }, []);
+
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
     setCurrentTime(val);
@@ -746,6 +795,11 @@ export function App() {
               }}
               onUploadFiles={handleUploadFiles}
               onUpdateTrackTitle={handleUpdateTrackTitle}
+              aiEngine={queue.ai_engine}
+              onProcessTrackLocal={handleProcessTrackLocal}
+              onDispatchTrackColab={handleDispatchTrackColab}
+              onBatchAction={handleBatchAction}
+              onInstallDemucs={handleInstallDemucs}
             />
           </div>
         </div>

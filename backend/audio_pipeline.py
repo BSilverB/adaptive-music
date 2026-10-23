@@ -12,6 +12,7 @@ import hashlib
 from typing import Dict, Any, List, Optional, Tuple
 import yt_dlp
 from pydub import AudioSegment
+from ai_engine_manager import ai_engine_manager
 
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -793,8 +794,11 @@ class AudioPipeline:
         demucs_out_dir = os.path.join(track_dir, "demucs_temp")
         os.makedirs(demucs_out_dir, exist_ok=True)
 
-        cmd = [
-            sys.executable, "-m", "demucs.separate",
+        runner, runner_type = ai_engine_manager.get_demucs_runner()
+        if not runner:
+            raise RuntimeError("Demucs AI Engine is not installed on this machine. Please install it or use Google Colab.")
+
+        cmd = list(runner) + [
             "-n", "htdemucs",
             "-d", self.device,
             "-o", demucs_out_dir,
@@ -806,7 +810,7 @@ class AudioPipeline:
         creationflags = 0x00004000 if sys.platform == "win32" else 0
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=creationflags, text=True)
         if result.returncode != 0:
-            raise RuntimeError(f"Demucs thất bại: {result.stderr[-500:]}")
+            raise RuntimeError(f"Demucs failed ({runner_type}): {result.stderr[-500:]}")
 
         stems_dir = os.path.join(demucs_out_dir, "htdemucs", "original")
         drums_path = os.path.join(stems_dir, "drums.wav")
@@ -832,6 +836,56 @@ class AudioPipeline:
 
         shutil.rmtree(demucs_out_dir, ignore_errors=True)
 
+    def process_track_local(self, track_id: str) -> Dict[str, Any]:
+        track = self.tracks.get(track_id)
+        if not track:
+            return {"status": "error", "message": f"Track {track_id} not found"}
+        if track.get("has_stems"):
+            return {"status": "noop", "message": "Track already has 4 stems ready"}
+
+        track["status"] = "QUEUED"
+        track.pop("error", None)
+        self.job_queue.put(track_id)
+        self._save_tracks()
+        return {"status": "success", "track": track}
+
+    def dispatch_track_to_colab(self, track_id: str) -> Dict[str, Any]:
+        track = self.tracks.get(track_id)
+        if not track:
+            return {"status": "error", "message": f"Track {track_id} not found"}
+        if track.get("has_stems"):
+            return {"status": "noop", "message": "Track already has 4 stems ready"}
+
+        original_mp3 = track.get("original_path") or os.path.join(CACHE_DIR, track_id, "original.mp3")
+        if not os.path.exists(original_mp3):
+            return {"status": "error", "message": "Original audio file not found on disk"}
+
+        input_drive_file = os.path.join(self.drive_sync_dir, "01_Input_Audio", f"{track_id}.mp3")
+        try:
+            self._ensure_drive_folders()
+            shutil.copy2(original_mp3, input_drive_file)
+            track["status"] = "WAITING_COLAB"
+            track.pop("error", None)
+            self._save_tracks()
+            return {"status": "success", "track": track}
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to dispatch to Drive: {str(e)}"}
+
+    def batch_action(self, action: str, track_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+        target_ids = track_ids if track_ids is not None else [
+            tid for tid, t in self.tracks.items() if not t.get("has_stems")
+        ]
+        results = []
+        for tid in target_ids:
+            if action == "process_local":
+                res = self.process_track_local(tid)
+            elif action == "dispatch_colab":
+                res = self.dispatch_track_to_colab(tid)
+            else:
+                res = {"status": "error", "message": f"Unknown action: {action}"}
+            results.append({"track_id": tid, "result": res})
+        return {"status": "success", "processed_count": len(results), "results": results}
+
     def get_queue_status(self) -> Dict[str, Any]:
         return {
             "queue_size": self.job_queue.qsize(),
@@ -841,7 +895,8 @@ class AudioPipeline:
             "device": self.device,
             "engine_mode": self.engine_mode,
             "pending_colab_count": self.get_pending_colab_count(),
-            "drive_sync_dir": self.drive_sync_dir
+            "drive_sync_dir": self.drive_sync_dir,
+            "ai_engine": ai_engine_manager.get_status()
         }
 
 audio_pipeline = AudioPipeline()

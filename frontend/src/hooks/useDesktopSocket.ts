@@ -20,6 +20,20 @@ export interface SystemState {
   ram_percent: number;
 }
 
+export interface AIEngineState {
+  installed: boolean;
+  runner_type: string;
+  device: string;
+  gpu_name: string;
+  has_nvidia: boolean;
+  cuda_ready: boolean;
+  install_state: "idle" | "installing" | "ready" | "failed";
+  install_progress: number;
+  install_message: string;
+  recent_logs?: string[];
+  ai_engine_dir?: string;
+}
+
 export interface QueueState {
   queue_size: number;
   current_job: string | null;
@@ -27,6 +41,7 @@ export interface QueueState {
   engine_mode: "COLAB_BATCH" | "LOCAL";
   pending_colab_count: number;
   drive_sync_dir: string;
+  ai_engine?: AIEngineState;
 }
 
 export function useDesktopSocket() {
