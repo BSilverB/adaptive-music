@@ -41,6 +41,7 @@ export interface QueueState {
   engine_mode: "COLAB_BATCH" | "LOCAL";
   pending_colab_count: number;
   drive_sync_dir: string;
+  tracks_version?: number;
   ai_engine?: AIEngineState;
 }
 

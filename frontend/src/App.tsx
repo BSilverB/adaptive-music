@@ -141,11 +141,28 @@ export function App() {
     }
   }, [activePlaylistId]);
 
-  // Chỉ fetch bài hát & playlists khi khởi động hoặc khi số lượng bài trên backend thay đổi
+  // Tự động re-fetch bài hát & playlists khi có bài mới, đổi version, hoặc job tách stems hoàn tất
   useEffect(() => {
     fetchTracks();
     fetchPlaylists();
-  }, [fetchTracks, fetchPlaylists, tracksCount]);
+  }, [fetchTracks, fetchPlaylists, tracksCount, queue.tracks_version, queue.current_job, queue.queue_size]);
+
+  // Tự động cập nhật currentTrack nếu bài đang phát vừa được tách stems xong
+  useEffect(() => {
+    if (currentTrack) {
+      const updated = tracks.find((t) => t.id === currentTrack.id);
+      if (
+        updated &&
+        (updated.has_stems !== currentTrack.has_stems ||
+          updated.status !== currentTrack.status)
+      ) {
+        setCurrentTrack(updated);
+        if (updated.has_stems && !currentTrack.has_stems && isPlaying) {
+          adaptiveEngine.playTrack(updated, currentTime);
+        }
+      }
+    }
+  }, [tracks, currentTrack, isPlaying]);
 
   // Playlist hiện tại đang active
   const currentPlaylist = useMemo(() => {

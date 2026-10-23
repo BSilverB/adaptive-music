@@ -123,7 +123,9 @@ class AudioPipeline:
 
         self.deleted_tracks: set = self._load_deleted_tracks()
         self.tracks: Dict[str, Dict[str, Any]] = self._load_tracks()
+        self.tracks_version: float = time.time()
         self.clean_legacy_stems()
+        self.cleanup_completed_from_drive_input()
         self.playlists_data: Dict[str, Any] = self._load_playlists()
         self._sync_default_playlist()
 
@@ -165,6 +167,26 @@ class AudioPipeline:
         except Exception as e:
             print(f"[Drive Sync] Failed to create sync directory: {e}")
 
+    def _cleanup_drive_input(self, track_id: str) -> None:
+        """Xóa file nhạc khỏi 01_Input_Audio trên Drive nếu bài này đã được tách stems xong ở local."""
+        if self.drive_sync_dir and os.path.exists(self.drive_sync_dir):
+            input_dir = os.path.join(self.drive_sync_dir, "01_Input_Audio")
+            if os.path.exists(input_dir):
+                for ext in [".mp3", ".wav"]:
+                    target = os.path.join(input_dir, f"{track_id}{ext}")
+                    if os.path.exists(target):
+                        try:
+                            os.remove(target)
+                            print(f"[Drive Cleanup] Removed {track_id}{ext} from 01_Input_Audio (already completed locally)")
+                        except Exception as e:
+                            print(f"[Drive Cleanup] Error removing {target}: {e}")
+
+    def cleanup_completed_from_drive_input(self) -> None:
+        """Quét và dọn dẹp toàn bộ file trong 01_Input_Audio nếu các bài đó đã có 4 stems sẵn sàng."""
+        for tid, trk in self.tracks.items():
+            if trk.get("has_stems"):
+                self._cleanup_drive_input(tid)
+
     def set_drive_sync_dir(self, new_path: str) -> None:
         if new_path and os.path.exists(os.path.dirname(new_path)):
             self.drive_sync_dir = new_path
@@ -201,6 +223,7 @@ class AudioPipeline:
         return {}
 
     def _save_tracks(self) -> None:
+        self.tracks_version = time.time()
         try:
             with open(TRACKS_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.tracks, f, ensure_ascii=False, indent=2)
@@ -776,6 +799,7 @@ class AudioPipeline:
 
                 track["status"] = "READY"
                 track["has_stems"] = True
+                self._cleanup_drive_input(video_id)
                 print(f"[Local Demucs] Separation complete: {video_id}!")
             except Exception as e:
                 print(f"[Local Demucs] Separation error: {e}")
@@ -896,6 +920,7 @@ class AudioPipeline:
             "engine_mode": self.engine_mode,
             "pending_colab_count": self.get_pending_colab_count(),
             "drive_sync_dir": self.drive_sync_dir,
+            "tracks_version": self.tracks_version,
             "ai_engine": ai_engine_manager.get_status()
         }
 
