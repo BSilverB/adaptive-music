@@ -26,11 +26,13 @@ import {
   FolderUp,
   Zap,
   Clock,
+  FileArchive,
 } from "lucide-react";
 import type { TrackMeta, Playlist } from "../audio/AdaptiveEngine";
 import type { AIEngineState } from "../hooks/useDesktopSocket";
 import { YtDlpConsentModal } from "./YtDlpConsentModal";
 import { AIEngineModal } from "./AIEngineModal";
+import { ColabDispatchModal } from "./ColabDispatchModal";
 
 const VALID_EXTENSIONS = [".mp3", ".wav", ".flac", ".m4a", ".ogg"];
 
@@ -136,6 +138,8 @@ interface PlaylistViewProps {
   onDispatchTrackColab?: (trackId: string) => Promise<void>;
   onBatchAction?: (action: "process_local" | "dispatch_colab", trackIds?: string[]) => Promise<void>;
   onInstallDemucs?: () => Promise<void>;
+  onOpenFolder?: (folderType: "input_audio" | "sync_drive" | "cache_stems") => Promise<any>;
+  onImportZip?: (file: File) => Promise<{ success: boolean; message: string; count?: number }>;
 }
 
 export const PlaylistView: React.FC<PlaylistViewProps> = ({
@@ -173,6 +177,8 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
   onDispatchTrackColab,
   onBatchAction,
   onInstallDemucs,
+  onOpenFolder,
+  onImportZip,
 }) => {
   const [inputUrl, setInputUrl] = useState("");
   const [loading, setLoading] = useState(false);
@@ -180,6 +186,7 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [showCpuWarning, setShowCpuWarning] = useState(false);
+  const [showColabModal, setShowColabModal] = useState(false);
 
   // States for Playlist Management
   const [isCreatingPlaylist, setIsCreatingPlaylist] = useState(false);
@@ -263,8 +270,9 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
   const handleTriggerColab = async (trackId: string) => {
     if (onDispatchTrackColab) {
       await onDispatchTrackColab(trackId);
-      setSuccessMsg("Đã nạp file vào Google Drive (01_Input_Audio/) chờ Colab.");
-      setTimeout(() => setSuccessMsg(null), 4000);
+      setShowColabModal(true);
+      setSuccessMsg("Đã nạp file vào 01_Input_Audio/. Hãy mở Colab để tách hoặc nạp file ZIP.");
+      setTimeout(() => setSuccessMsg(null), 5000);
     }
   };
 
@@ -290,8 +298,9 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
       setIsProcessingBatch(true);
       try {
         await onBatchAction("dispatch_colab", pendingTracks.map((t) => t.id));
-        setSuccessMsg(`Đã đẩy toàn bộ ${pendingCount} bài lên Google Drive cho Colab.`);
-        setTimeout(() => setSuccessMsg(null), 4000);
+        setShowColabModal(true);
+        setSuccessMsg(`Đã đẩy toàn bộ ${pendingCount} bài vào 01_Input_Audio/ cho Colab.`);
+        setTimeout(() => setSuccessMsg(null), 5000);
       } finally {
         setIsProcessingBatch(false);
       }
@@ -755,14 +764,24 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
               <Cloud className="h-3.5 w-3.5" />
               <span>GOOGLE DRIVE COLAB SYNC</span>
             </span>
-            <button
-              onClick={handleSyncClick}
-              disabled={syncing}
-              className="flex items-center gap-1 rounded bg-cyan-900/60 hover:bg-cyan-800/80 px-2 py-0.5 text-[10px] font-semibold text-cyan-300 transition-all disabled:opacity-50"
-            >
-              <RefreshCw className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`} />
-              <span>{syncing ? "Đang quét..." : "Quét ngay"}</span>
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setShowColabModal(true)}
+                className="flex items-center gap-1 rounded bg-amber-500/20 hover:bg-amber-500 hover:text-slate-950 border border-amber-500/40 px-2 py-0.5 text-[10px] font-bold text-amber-300 transition-all shadow-sm"
+                title="Mở hướng dẫn tách nhạc Colab & Nạp file ZIP"
+              >
+                <Zap className="h-3 w-3" />
+                <span>HƯỚNG DẪN / NẠP ZIP</span>
+              </button>
+              <button
+                onClick={handleSyncClick}
+                disabled={syncing}
+                className="flex items-center gap-1 rounded bg-cyan-900/60 hover:bg-cyan-800/80 px-2 py-0.5 text-[10px] font-semibold text-cyan-300 transition-all disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3 w-3 ${syncing ? "animate-spin" : ""}`} />
+                <span>{syncing ? "Đang quét..." : "Quét ngay"}</span>
+              </button>
+            </div>
           </div>
           <p className="text-[11px] text-slate-400">
             {pendingColabCount > 0 ? (
@@ -957,30 +976,41 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
           </button>
         </div>
 
-        {/* Nút hành động hàng loạt khi có bài chờ tách */}
-        {pendingCount > 0 && (
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={handleBatchLocal}
-              disabled={isProcessingBatch}
-              className="flex items-center gap-1 rounded bg-cyan-950 border border-cyan-500/40 px-2.5 py-1 text-[10px] font-bold text-cyan-300 hover:bg-cyan-500 hover:text-slate-950 transition-all disabled:opacity-50"
-              title="Đưa toàn bộ bài chưa tách vào hàng đợi Local Demucs"
-            >
-              <Zap className="h-3 w-3" />
-              <span>TÁCH HẾT (LOCAL)</span>
-            </button>
+        {/* Nút hành động hàng loạt & Nạp ZIP */}
+        <div className="flex items-center gap-1.5">
+          {pendingCount > 0 && (
+            <>
+              <button
+                onClick={handleBatchLocal}
+                disabled={isProcessingBatch}
+                className="flex items-center gap-1 rounded bg-cyan-950 border border-cyan-500/40 px-2.5 py-1 text-[10px] font-bold text-cyan-300 hover:bg-cyan-500 hover:text-slate-950 transition-all disabled:opacity-50"
+                title="Đưa toàn bộ bài chưa tách vào hàng đợi Local Demucs"
+              >
+                <Zap className="h-3 w-3" />
+                <span>TÁCH HẾT (LOCAL)</span>
+              </button>
 
-            <button
-              onClick={handleBatchColab}
-              disabled={isProcessingBatch}
-              className="flex items-center gap-1 rounded bg-amber-950 border border-amber-500/40 px-2.5 py-1 text-[10px] font-bold text-amber-300 hover:bg-amber-500 hover:text-slate-950 transition-all disabled:opacity-50"
-              title="Đẩy toàn bộ bài chưa tách sang Drive cho Colab"
-            >
-              <Cloud className="h-3 w-3" />
-              <span>ĐẨY HẾT (COLAB)</span>
-            </button>
-          </div>
-        )}
+              <button
+                onClick={handleBatchColab}
+                disabled={isProcessingBatch}
+                className="flex items-center gap-1 rounded bg-amber-950 border border-amber-500/40 px-2.5 py-1 text-[10px] font-bold text-amber-300 hover:bg-amber-500 hover:text-slate-950 transition-all disabled:opacity-50"
+                title="Đẩy toàn bộ bài chưa tách sang Drive cho Colab"
+              >
+                <Cloud className="h-3 w-3" />
+                <span>ĐẨY HẾT (COLAB)</span>
+              </button>
+            </>
+          )}
+
+          <button
+            onClick={() => setShowColabModal(true)}
+            className="flex items-center gap-1 rounded bg-slate-900 border border-slate-700 hover:border-cyan-500/50 hover:bg-cyan-950/40 px-2.5 py-1 text-[10px] font-bold text-slate-300 hover:text-cyan-300 transition-all shadow-sm"
+            title="Mở hướng dẫn Colab hoặc nạp file ZIP stems trực tiếp"
+          >
+            <FileArchive className="h-3 w-3 text-cyan-400" />
+            <span>NẠP ZIP</span>
+          </button>
+        </div>
       </div>
 
       {/* 6. Danh sách Tracks (Hỗ trợ Kéo-Thả + Mũi tên Lên/Xuống) */}
@@ -1241,6 +1271,25 @@ export const PlaylistView: React.FC<PlaylistViewProps> = ({
           if (pendingTrackForLocal) handleTriggerColab(pendingTrackForLocal);
           onSetEngineMode("COLAB_BATCH");
         }}
+      />
+
+      {/* Hộp thoại Hướng Dẫn Tách Nhạc Colab GPU & Nạp ZIP */}
+      <ColabDispatchModal
+        isOpen={showColabModal}
+        onClose={() => setShowColabModal(false)}
+        pendingCount={pendingCount}
+        onOpenFolder={async (folderType) => {
+          if (onOpenFolder) {
+            return await onOpenFolder(folderType);
+          }
+        }}
+        onImportZip={async (file) => {
+          if (onImportZip) {
+            return await onImportZip(file);
+          }
+          return { success: false, message: "Hệ thống chưa hỗ trợ nạp ZIP" };
+        }}
+        onForceSync={onForceSync}
       />
     </div>
   );

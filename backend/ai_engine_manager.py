@@ -12,6 +12,33 @@ AI_ENGINE_DIR = os.path.join(
     "ai_engine"
 )
 
+def check_vcredist_installed() -> bool:
+    """Kiểm tra xem máy Windows đã cài đặt Microsoft Visual C++ 2015-2022 x64 Redistributable chưa"""
+    if sys.platform != "win32":
+        return True
+    sys_root = os.environ.get("SystemRoot", r"C:\Windows")
+    vc_dll = os.path.join(sys_root, "System32", "vcruntime140_1.dll")
+    return os.path.exists(vc_dll)
+
+def ensure_vcredist() -> bool:
+    """Tự động kiểm tra và cài đặt VC++ Redistributable nếu thiếu trên Windows"""
+    if sys.platform != "win32" or check_vcredist_installed():
+        return True
+    try:
+        os.makedirs(AI_ENGINE_DIR, exist_ok=True)
+        vc_installer = os.path.join(AI_ENGINE_DIR, "vc_redist.x64.exe")
+        if not os.path.exists(vc_installer) or os.path.getsize(vc_installer) < 1000000:
+            import urllib.request
+            vc_url = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+            req = urllib.request.Request(vc_url, headers={"User-Agent": "AdaptiveFlowEngine/1.0"})
+            with urllib.request.urlopen(req, timeout=60) as resp, open(vc_installer, "wb") as out_f:
+                shutil.copyfileobj(resp, out_f)
+        subprocess.run([vc_installer, "/install", "/quiet", "/norestart"], creationflags=0x00004000, timeout=120)
+        return check_vcredist_installed()
+    except Exception as e:
+        print(f"[AIEngineManager] ensure_vcredist error: {e}")
+        return False
+
 class AIEngineManager:
     def __init__(self):
         self.install_state = "idle"  # idle, installing, ready, failed
@@ -145,6 +172,7 @@ class AIEngineManager:
             "gpu_name": gpu_info["gpu_name"],
             "has_nvidia": gpu_info["has_nvidia"],
             "cuda_ready": gpu_info["cuda_ready"],
+            "vcredist_ready": check_vcredist_installed(),
             "install_state": self.install_state,
             "install_progress": self.install_progress,
             "install_message": self.install_message,
@@ -214,11 +242,37 @@ class AIEngineManager:
             else:
                 self.install_logs.append("FFmpeg binary is already available on this machine.")
 
-            # Bước 2: Kiểm tra Python và cài đặt Demucs qua pip
-            self._update_progress(40, "Đang kiểm tra môi trường Python để cài đặt Demucs...")
+            # Bước 2: Kiểm tra và cài đặt Visual C++ Runtime (Bắt buộc cho PyTorch trên Windows sạch)
+            if sys.platform == "win32":
+                if not check_vcredist_installed():
+                    self._update_progress(35, "Đang tải Microsoft Visual C++ 2015-2022 x64 Redistributable...")
+                    self.install_logs.append("Missing vcruntime140_1.dll. Downloading Visual C++ x64 Redistributable from Microsoft...")
+                    try:
+                        import urllib.request
+                        vc_url = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+                        vc_installer = os.path.join(AI_ENGINE_DIR, "vc_redist.x64.exe")
+                        req = urllib.request.Request(vc_url, headers={"User-Agent": "AdaptiveFlowEngine/1.0"})
+                        with urllib.request.urlopen(req, timeout=60) as resp, open(vc_installer, "wb") as out_f:
+                            shutil.copyfileobj(resp, out_f)
+
+                        self._update_progress(38, "Đang cài đặt Visual C++ Runtime (tự động chạy ngầm)...")
+                        self.install_logs.append(f"Running {vc_installer} /install /quiet /norestart...")
+                        vc_res = subprocess.run(
+                            [vc_installer, "/install", "/quiet", "/norestart"],
+                            creationflags=0x00004000,
+                            timeout=120
+                        )
+                        self.install_logs.append(f"Visual C++ installer exited with code {vc_res.returncode}")
+                    except Exception as vc_err:
+                        self.install_logs.append(f"Visual C++ installation notice: {vc_err}")
+                else:
+                    self.install_logs.append("Microsoft Visual C++ 2015-2022 x64 Runtime is already installed.")
+
+            # Bước 3: Kiểm tra Python và cài đặt Demucs qua pip
+            self._update_progress(45, "Đang kiểm tra môi trường Python để cài đặt Demucs...")
             sys_python = shutil.which("python") or shutil.which("python3")
             if sys_python:
-                self._update_progress(45, f"Phát hiện Python: {sys_python}. Đang cài đặt Demucs AI...")
+                self._update_progress(50, f"Phát hiện Python: {sys_python}. Đang cài đặt Demucs AI...")
                 cmd = [sys_python, "-m", "pip", "install", "--upgrade", "demucs"]
                 creationflags = 0x00004000 if sys.platform == "win32" else 0
                 process = subprocess.Popen(

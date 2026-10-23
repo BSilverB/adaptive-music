@@ -103,6 +103,9 @@ class BatchActionRequest(BaseModel):
     action: str  # "process_local" | "dispatch_colab"
     track_ids: Optional[List[str]] = None
 
+class OpenFolderRequest(BaseModel):
+    folder_type: str = "input_audio"  # "input_audio" | "sync_drive" | "cache_stems" | "processed_audio" | "output_stems"
+
 @app.get("/api/auth/token")
 def get_session_token():
     return {"token": SESSION_TOKEN}
@@ -295,6 +298,52 @@ def api_dispatch_track_colab(track_id: str):
 @app.post("/api/tracks/batch-action")
 def api_batch_action(req: BatchActionRequest):
     return audio_pipeline.batch_action(req.action, req.track_ids)
+
+@app.post("/api/system/open-folder")
+def api_open_folder(req: OpenFolderRequest):
+    folder_path = None
+    if req.folder_type == "input_audio":
+        folder_path = os.path.join(audio_pipeline.drive_sync_dir, "01_Input_Audio")
+    elif req.folder_type == "processed_audio":
+        folder_path = os.path.join(audio_pipeline.drive_sync_dir, "02_Processed_Audio")
+    elif req.folder_type == "output_stems":
+        folder_path = os.path.join(audio_pipeline.drive_sync_dir, "03_Output_Stems")
+    elif req.folder_type == "sync_drive":
+        folder_path = audio_pipeline.drive_sync_dir
+    elif req.folder_type == "cache_stems":
+        folder_path = CACHE_DIR
+    else:
+        folder_path = audio_pipeline.drive_sync_dir
+
+    os.makedirs(folder_path, exist_ok=True)
+    try:
+        if sys.platform == "win32":
+            os.startfile(folder_path)
+        elif sys.platform == "darwin":
+            subprocess.run(["open", folder_path])
+        else:
+            subprocess.run(["xdg-open", folder_path])
+        return {"status": "ok", "path": folder_path}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "path": folder_path}
+
+@app.post("/api/tracks/import-stems-zip")
+async def api_import_stems_zip(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Không có file nào được chọn")
+    if not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Vui lòng chỉ nạp định dạng file .zip")
+
+    try:
+        content = await file.read()
+        res = audio_pipeline.import_stems_from_zip(content)
+        if not res.get("success"):
+            raise HTTPException(status_code=400, detail=res.get("message", "Lỗi nạp file zip"))
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi xử lý file zip: {str(e)}")
 
 @app.post("/api/settings/engine-mode")
 def api_set_engine_mode(req: EngineModeRequest):

@@ -238,12 +238,20 @@ app.whenReady().then(async () => {
     const backendScript = path.join(backendDir, "main.py");
 
     let spawnCmd, spawnArgs;
-    if (fs.existsSync(standaloneExe)) {
+    if (app.isPackaged && fs.existsSync(standaloneExe)) {
+      log(`[Electron] Detected Standalone Backend Engine (Packaged): ${standaloneExe}`);
+      spawnCmd = standaloneExe;
+      spawnArgs = ["--port", String(currentPort), "--watchdog"];
+    } else if (fs.existsSync(backendScript)) {
+      log(`[Electron] Development mode: Running python ${backendScript}`);
+      spawnCmd = "python";
+      spawnArgs = ["-u", backendScript, "--port", String(currentPort), "--watchdog"];
+    } else if (fs.existsSync(standaloneExe)) {
       log(`[Electron] Detected Standalone Backend Engine: ${standaloneExe}`);
       spawnCmd = standaloneExe;
       spawnArgs = ["--port", String(currentPort), "--watchdog"];
     } else {
-      log(`[Electron] Using System Python: python ${backendScript}`);
+      log(`[Electron] Fallback: python ${backendScript}`);
       spawnCmd = "python";
       spawnArgs = ["-u", backendScript, "--port", String(currentPort), "--watchdog"];
     }

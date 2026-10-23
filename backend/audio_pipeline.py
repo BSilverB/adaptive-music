@@ -201,11 +201,20 @@ class AudioPipeline:
             r"G:\Drive của tôi\AdaptiveMusic_Sync",
             os.path.expanduser(r"~\Google Drive\AdaptiveMusic_Sync"),
             os.path.join(BASE_DIR, "sync_drive", "AdaptiveMusic_Sync"),
+            os.path.join(BASE_DIR, "sync_drive"),
         ]
+        # 1. Ưu tiên thư mục đã tồn tại từ trước (kể cả Google Drive thật hoặc sync_drive cục bộ)
+        for path in candidates:
+            if os.path.exists(path) and os.path.isdir(path):
+                return path
+
+        # 2. Nếu chưa tạo thư mục con, ưu tiên đường dẫn có thư mục cha tồn tại (ví dụ ổ đĩa G: của Google Drive)
         for path in candidates:
             if os.path.exists(os.path.dirname(path)):
                 return path
-        return os.path.join(BASE_DIR, "sync_drive", "AdaptiveMusic_Sync")
+
+        # 3. Fallback an toàn tuyệt đối về thư mục cục bộ trong backend
+        return os.path.join(BASE_DIR, "sync_drive")
 
     def _ensure_drive_folders(self) -> None:
         try:
@@ -531,12 +540,54 @@ class AudioPipeline:
                     print(f"[Drive Sync] Error copying 4 stems for {video_id}: {e}")
 
                 meta_data = {}
+                local_meta = os.path.join(local_track_dir, "metadata.json")
                 if os.path.exists(meta_file):
                     try:
-                        with open(meta_file, "r", encoding="utf-8") as mf:
+                        shutil.copy2(meta_file, local_meta)
+                        with open(local_meta, "r", encoding="utf-8") as mf:
+                            meta_data = json.load(mf)
+                    except Exception as me:
+                        print(f"[Drive Sync] Error copying/reading metadata for {video_id}: {me}")
+                elif os.path.exists(local_meta):
+                    try:
+                        shutil.copy2(local_meta, meta_file)
+                        with open(local_meta, "r", encoding="utf-8") as mf:
                             meta_data = json.load(mf)
                     except Exception:
                         pass
+                else:
+                    # Tạo metadata.json đồng nhất lưu vào cả 2 thư mục
+                    try:
+                        meta_data = {
+                            "video_id": video_id,
+                            "title": self.tracks.get(video_id, {}).get("title") or f"Track {video_id}",
+                            "duration": self.tracks.get(video_id, {}).get("duration") or 0,
+                            "bpm": self.tracks.get(video_id, {}).get("bpm") or 120.0,
+                            "bitrate": "320kbps",
+                            "status": "READY"
+                        }
+                        with open(local_meta, "w", encoding="utf-8") as mf:
+                            json.dump(meta_data, mf, indent=2, ensure_ascii=False)
+                        with open(meta_file, "w", encoding="utf-8") as mf:
+                            json.dump(meta_data, mf, indent=2, ensure_ascii=False)
+                    except Exception:
+                        pass
+
+                # Tự động dọn dẹp chuyển file từ 01_Input_Audio sang 02_Processed_Audio nếu có
+                input_dir = os.path.join(self.drive_sync_dir, "01_Input_Audio")
+                processed_dir = os.path.join(self.drive_sync_dir, "02_Processed_Audio")
+                if os.path.isdir(input_dir) and os.path.isdir(processed_dir):
+                    for f in os.listdir(input_dir):
+                        if os.path.splitext(f)[0] == video_id:
+                            try:
+                                src_f = os.path.join(input_dir, f)
+                                dst_f = os.path.join(processed_dir, f)
+                                if os.path.exists(dst_f):
+                                    os.remove(dst_f)
+                                shutil.move(src_f, dst_f)
+                                print(f"[Drive Sync] Moved {f} to 02_Processed_Audio")
+                            except Exception as me:
+                                print(f"[Drive Sync] Error moving processed file: {me}")
 
                 local_other = os.path.join(local_track_dir, "other.mp3")
                 if video_id in self.tracks:
@@ -581,6 +632,199 @@ class AudioPipeline:
                 self.sync_from_drive()
             except Exception as e:
                 print(f"[Drive Watcher] Error in background sync: {e}")
+
+    def import_stems_from_zip(self, zip_content: bytes) -> Dict[str, Any]:
+        """
+        Nạp file ZIP chứa 4 stems (vocals, other, bass, drums) và metadata.json từ Colab hoặc người dùng.
+        Hỗ trợ cả ZIP lồng thư mục bài hát (Stems_Completed/{track_id}/) và ZIP phẳng.
+        Tự động:
+        1. Bung và lưu vào cache_stems/{track_id}/ (đủ 4 stems + metadata.json)
+        2. Đồng bộ vào sync_drive/03_Output_Stems/{track_id}/ (đủ 4 stems + metadata.json)
+        3. Tự động chuyển file trong 01_Input_Audio sang 02_Processed_Audio
+        4. Cập nhật state bài hát sang READY, kích hoạt 4 stems (320kbps), tăng tracks_version
+        """
+        import zipfile
+        import io
+
+        imported_tracks = []
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_content)) as z:
+                all_names = z.namelist()
+                tracks_files: Dict[str, Dict[str, str]] = {}
+
+                for name in all_names:
+                    if name.endswith("/") or "__MACOSX" in name or name.startswith("."):
+                        continue
+
+                    parts = [p for p in name.replace("\\", "/").split("/") if p]
+                    if not parts:
+                        continue
+
+                    filename = parts[-1].lower()
+
+                    # Xác định track_id từ thư mục cha
+                    track_id = None
+                    if len(parts) >= 3 and parts[0].lower() in ["stems_completed", "03_output_stems", "output_stems"]:
+                        track_id = parts[1]
+                    elif len(parts) >= 2:
+                        track_id = parts[0]
+                    else:
+                        track_id = "_root_"
+
+                    if track_id not in tracks_files:
+                        tracks_files[track_id] = {}
+                    tracks_files[track_id][filename] = name
+
+                # Xử lý nếu file nằm ở root ZIP
+                if "_root_" in tracks_files:
+                    root_dict = tracks_files["_root_"]
+                    real_id = None
+                    if "metadata.json" in root_dict:
+                        try:
+                            meta_raw = json.loads(z.read(root_dict["metadata.json"]).decode("utf-8"))
+                            real_id = meta_raw.get("video_id") or meta_raw.get("id") or meta_raw.get("track_id")
+                        except Exception:
+                            pass
+
+                    if not real_id:
+                        for tid, tinfo in self.tracks.items():
+                            if tinfo.get("status") in ["WAITING_COLAB", "QUEUED", "PROCESSING"] or not tinfo.get("has_stems"):
+                                real_id = tid
+                                break
+
+                    if not real_id:
+                        real_id = f"imported_{int(time.time())}"
+
+                    tracks_files[real_id] = root_dict
+                    del tracks_files["_root_"]
+
+                output_drive_dir = os.path.join(self.drive_sync_dir, "03_Output_Stems")
+                input_drive_dir = os.path.join(self.drive_sync_dir, "01_Input_Audio")
+                processed_drive_dir = os.path.join(self.drive_sync_dir, "02_Processed_Audio")
+
+                for tid, fmap in tracks_files.items():
+                    required_stems = ["vocals.mp3", "other.mp3", "bass.mp3", "drums.mp3"]
+                    has_stems = all(stem in fmap for stem in required_stems)
+                    if not has_stems:
+                        continue
+
+                    local_track_dir = os.path.join(CACHE_DIR, tid)
+                    os.makedirs(local_track_dir, exist_ok=True)
+
+                    drive_track_dir = os.path.join(output_drive_dir, tid)
+                    if os.path.isdir(self.drive_sync_dir):
+                        os.makedirs(drive_track_dir, exist_ok=True)
+
+                    # Lưu 4 stems
+                    for stem_name in required_stems:
+                        stem_bytes = z.read(fmap[stem_name])
+                        loc_p = os.path.join(local_track_dir, stem_name)
+                        with open(loc_p, "wb") as f_out:
+                            f_out.write(stem_bytes)
+                        if os.path.isdir(self.drive_sync_dir):
+                            drv_p = os.path.join(drive_track_dir, stem_name)
+                            with open(drv_p, "wb") as f_drv:
+                                f_drv.write(stem_bytes)
+
+                    # Đọc và ghi metadata.json
+                    meta_data = {}
+                    if "metadata.json" in fmap:
+                        try:
+                            meta_raw_str = z.read(fmap["metadata.json"]).decode("utf-8")
+                            meta_data = json.loads(meta_raw_str)
+                        except Exception:
+                            pass
+
+                    loc_other = os.path.join(local_track_dir, "other.mp3")
+                    duration = meta_data.get("duration") or 0
+                    if duration == 0 and os.path.exists(loc_other):
+                        try:
+                            duration = int(len(AudioSegment.from_file(loc_other)) / 1000)
+                        except Exception:
+                            pass
+
+                    bpm = meta_data.get("bpm") or 120.0
+                    title = meta_data.get("title") or self.tracks.get(tid, {}).get("title") or f"Track {tid}"
+
+                    final_meta = {
+                        "video_id": tid,
+                        "title": title,
+                        "duration": duration,
+                        "bpm": bpm,
+                        "bitrate": "320kbps",
+                        "status": "READY",
+                        "imported_at": time.strftime("%Y-%m-%d %H:%M:%S")
+                    }
+
+                    # Ghi metadata.json đầy đủ vào cả cache local và sync_drive
+                    with open(os.path.join(local_track_dir, "metadata.json"), "w", encoding="utf-8") as mf:
+                        json.dump(final_meta, mf, indent=2, ensure_ascii=False)
+                    if os.path.isdir(self.drive_sync_dir):
+                        with open(os.path.join(drive_track_dir, "metadata.json"), "w", encoding="utf-8") as mfd:
+                            json.dump(final_meta, mfd, indent=2, ensure_ascii=False)
+
+                    # Chuyển file trong 01_Input_Audio sang 02_Processed_Audio nếu có
+                    if os.path.isdir(input_drive_dir) and os.path.isdir(processed_drive_dir):
+                        for f in os.listdir(input_drive_dir):
+                            if os.path.splitext(f)[0] == tid:
+                                try:
+                                    src_f = os.path.join(input_drive_dir, f)
+                                    dst_f = os.path.join(processed_drive_dir, f)
+                                    if os.path.exists(dst_f):
+                                        os.remove(dst_f)
+                                    shutil.move(src_f, dst_f)
+                                    print(f"[Import ZIP] Moved {f} to 02_Processed_Audio")
+                                except Exception as me:
+                                    print(f"[Import ZIP] Error moving processed file: {me}")
+
+                    # Cập nhật memory track state
+                    if tid in self.tracks:
+                        track = self.tracks[tid]
+                        track["status"] = "READY"
+                        track["has_stems"] = True
+                        track["bpm"] = bpm
+                        if duration > 0:
+                            track["duration"] = duration
+                        if title and track.get("title", "").startswith("Track "):
+                            track["title"] = title
+                    else:
+                        self.tracks[tid] = {
+                            "id": tid,
+                            "title": title,
+                            "duration": duration,
+                            "thumbnail": f"https://i.ytimg.com/vi/{tid}/maxresdefault.jpg",
+                            "status": "READY",
+                            "has_stems": True,
+                            "bpm": bpm,
+                            "original_path": os.path.join(local_track_dir, "original.mp3"),
+                            "source": "colab_zip"
+                        }
+
+                    imported_tracks.append(tid)
+
+            if imported_tracks:
+                self.tracks_version += 1
+                self._save_tracks()
+                self._sync_default_playlist()
+                return {
+                    "success": True,
+                    "count": len(imported_tracks),
+                    "imported_tracks": imported_tracks,
+                    "message": f"Nạp thành công {len(imported_tracks)} bài hát vào hệ thống!"
+                }
+            else:
+                return {
+                    "success": False,
+                    "count": 0,
+                    "message": "Không tìm thấy đủ 4 file stems (vocals.mp3, other.mp3, bass.mp3, drums.mp3) hợp lệ trong file ZIP."
+                }
+        except Exception as e:
+            print(f"[Import ZIP] Error processing zip: {e}")
+            return {
+                "success": False,
+                "count": 0,
+                "message": f"Lỗi giải nén ZIP: {str(e)}"
+            }
 
     def add_local_audio_file(self, temp_path: str, original_filename: str) -> Dict[str, Any]:
         """
@@ -926,7 +1170,19 @@ class AudioPipeline:
         if result.returncode != 0:
             raise RuntimeError(f"Demucs failed ({runner_type}): {result.stderr[-500:]}")
 
-        stems_dir = os.path.join(demucs_out_dir, "htdemucs", "original")
+        orig_base = os.path.splitext(os.path.basename(original_mp3))[0]
+        stems_dir = os.path.join(demucs_out_dir, "htdemucs", orig_base)
+        if not os.path.exists(stems_dir):
+            ht_model_dir = os.path.join(demucs_out_dir, "htdemucs")
+            if os.path.exists(ht_model_dir):
+                subdirs = [os.path.join(ht_model_dir, d) for d in os.listdir(ht_model_dir) if os.path.isdir(os.path.join(ht_model_dir, d))]
+                if subdirs:
+                    stems_dir = subdirs[0]
+                else:
+                    stems_dir = os.path.join(demucs_out_dir, "htdemucs", "original")
+            else:
+                stems_dir = os.path.join(demucs_out_dir, "htdemucs", "original")
+
         drums_path = os.path.join(stems_dir, "drums.wav")
         bass_path = os.path.join(stems_dir, "bass.wav")
         other_path = os.path.join(stems_dir, "other.wav")
@@ -964,6 +1220,29 @@ class AudioPipeline:
                 json.dump(meta_data, mf, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"[Metadata] Error writing local metadata.json: {e}")
+
+        # Đồng bộ 4 stems + metadata.json sang sync_drive nếu có
+        try:
+            drive_stem_dir = os.path.join(self.drive_sync_dir, "03_Output_Stems", video_id)
+            if os.path.isdir(self.drive_sync_dir):
+                os.makedirs(drive_stem_dir, exist_ok=True)
+                for s in ["vocals", "other", "bass", "drums"]:
+                    shutil.copy2(os.path.join(track_dir, f"{s}.mp3"), os.path.join(drive_stem_dir, f"{s}.mp3"))
+                if os.path.exists(meta_file):
+                    shutil.copy2(meta_file, os.path.join(drive_stem_dir, "metadata.json"))
+
+            in_d = os.path.join(self.drive_sync_dir, "01_Input_Audio")
+            proc_d = os.path.join(self.drive_sync_dir, "02_Processed_Audio")
+            if os.path.isdir(in_d) and os.path.isdir(proc_d):
+                for f in os.listdir(in_d):
+                    if os.path.splitext(f)[0] == video_id:
+                        src_f = os.path.join(in_d, f)
+                        dst_f = os.path.join(proc_d, f)
+                        if os.path.exists(dst_f):
+                            os.remove(dst_f)
+                        shutil.move(src_f, dst_f)
+        except Exception as e:
+            print(f"[Local Demucs] Sync to drive notice: {e}")
 
         shutil.rmtree(demucs_out_dir, ignore_errors=True)
 

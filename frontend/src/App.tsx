@@ -714,6 +714,46 @@ export function App() {
     }
   }, []);
 
+  const handleOpenFolder = useCallback(
+    async (folderType: "input_audio" | "sync_drive" | "cache_stems") => {
+      try {
+        const resp = await fetch(`${getApiBaseUrl()}/api/system/open-folder`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ folder_type: folderType }),
+        });
+        return await resp.json();
+      } catch (e) {
+        console.error("Lỗi mở thư mục hệ thống:", e);
+      }
+    },
+    []
+  );
+
+  const handleImportStemsZip = useCallback(
+    async (file: File) => {
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const resp = await fetch(`${getApiBaseUrl()}/api/tracks/import-stems-zip`, {
+          method: "POST",
+          body: formData,
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+          await fetchTracks();
+          await fetchPlaylists();
+          return { success: true, message: data.message, count: data.count };
+        } else {
+          return { success: false, message: data.detail || "Lỗi khi nạp file ZIP" };
+        }
+      } catch (e: any) {
+        return { success: false, message: e?.message || "Lỗi kết nối máy chủ" };
+      }
+    },
+    [fetchTracks, fetchPlaylists]
+  );
+
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
     setCurrentTime(val);
@@ -841,6 +881,8 @@ export function App() {
               onDispatchTrackColab={handleDispatchTrackColab}
               onBatchAction={handleBatchAction}
               onInstallDemucs={handleInstallDemucs}
+              onOpenFolder={handleOpenFolder}
+              onImportZip={handleImportStemsZip}
             />
           </div>
         </div>
