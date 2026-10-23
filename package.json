@@ -10,7 +10,8 @@
     "start": "electron .",
     "desktop": "npm run frontend:build && electron .",
     "pack": "npm run frontend:build && electron-builder --dir",
-    "dist": "npm run frontend:build && electron-builder"
+    "dist": "npm run frontend:build && electron-builder",
+    "release": "npm run frontend:build && electron-builder --publish always"
   },
   "keywords": [
     "audio",
@@ -28,6 +29,13 @@
     "directories": {
       "output": "release"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "BSilverB",
+        "repo": "adaptive-music"
+      }
+    ],
     "files": [
       "electron/**/*",
       "frontend/dist/**/*",
@@ -82,5 +90,8 @@
   "devDependencies": {
     "electron": "^35.0.0",
     "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

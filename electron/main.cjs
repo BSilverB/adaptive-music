@@ -4,6 +4,7 @@ const http = require("http");
 const fs = require("fs");
 const { app, BrowserWindow, shell, dialog } = require("electron");
 const { spawn, execSync } = require("child_process");
+const { autoUpdater } = require("electron-updater");
 
 let mainWindow = null;
 let pythonProcess = null;
@@ -157,6 +158,70 @@ async function createWindow(port) {
   });
 }
 
+// 4.1 Cấu hình tự động cập nhật (Auto-Updater qua GitHub Releases)
+function setupAutoUpdater() {
+  if (!app.isPackaged) {
+    log("[Updater] Running in development mode - skipping auto-update checks.");
+    return;
+  }
+
+  try {
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+
+    autoUpdater.on("checking-for-update", () => {
+      log("[Updater] Checking for updates on GitHub Releases...");
+    });
+
+    autoUpdater.on("update-available", (info) => {
+      log(`[Updater] Update available: v${info.version} (current: v${app.getVersion()})`);
+    });
+
+    autoUpdater.on("update-not-available", (info) => {
+      log(`[Updater] Application is up-to-date (v${info.version}).`);
+    });
+
+    autoUpdater.on("error", (err) => {
+      log(`[Updater Error] ${err.message || err}`);
+    });
+
+    autoUpdater.on("download-progress", (progressObj) => {
+      log(`[Updater] Downloaded: ${Math.round(progressObj.percent)}% (${Math.round(progressObj.bytesPerSecond / 1024)} KB/s)`);
+    });
+
+    autoUpdater.on("update-downloaded", (info) => {
+      log(`[Updater] Update v${info.version} downloaded successfully!`);
+      dialog
+        .showMessageBox(mainWindow, {
+          type: "info",
+          title: "Bản Cập Nhật Mới Đã Sẵn Sàng",
+          message: `Phiên bản mới (v${info.version}) đã được tải về thành công!`,
+          detail:
+            "Bạn có muốn khởi động lại ngay để áp dụng bản cập nhật không?\n(Dữ liệu bài hát và cài đặt của bạn sẽ được giữ nguyên 100%).",
+          buttons: ["Khởi động lại ngay", "Để sau"],
+          defaultId: 0,
+          cancelId: 1,
+        })
+        .then((selection) => {
+          if (selection.response === 0) {
+            isQuitting = true;
+            killPythonProcess();
+            autoUpdater.quitAndInstall();
+          }
+        });
+    });
+
+    // Trì hoãn 4 giây sau khi khởi động để hệ thống ổn định trước khi check
+    setTimeout(() => {
+      autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+        log(`[Updater Catch] ${err.message}`);
+      });
+    }, 4000);
+  } catch (err) {
+    log(`[Updater Setup Error] ${err.message}`);
+  }
+}
+
 // 5. Khởi động ứng dụng Electron
 app.whenReady().then(async () => {
   log(`=== APPLICATION STARTUP (isPackaged: ${app.isPackaged}) ===`);
@@ -234,6 +299,7 @@ app.whenReady().then(async () => {
     log(`[Electron] Backend is ready! Opening main window...`);
 
     await createWindow(currentPort);
+    setupAutoUpdater();
   } catch (err) {
     log(`[Electron Startup Catch] ${err.stack || err.message}`);
     dialog.showErrorBox(
