@@ -26,7 +26,7 @@ DELETED_TRACKS_FILE = os.path.join(CACHE_DIR, "deleted_tracks.json")
 try:
     os.makedirs(CACHE_DIR, exist_ok=True)
 except Exception as e:
-    print(f"[Cache] Không thể tạo thư mục CACHE_DIR: {e}")
+    print(f"[Cache] Failed to create CACHE_DIR: {e}")
 
 def fetch_real_track_info(video_id: str, audio_path: Optional[str] = None) -> Tuple[str, int]:
     """
@@ -88,7 +88,7 @@ def extract_audio_metadata(file_path: str, fallback_title: str = "Unknown Track"
                 else:
                     title = tag_title
     except Exception as e:
-        print(f"[Metadata] Lỗi đọc ffprobe metadata: {e}")
+        print(f"[Metadata] Error reading ffprobe metadata: {e}")
 
     if duration == 0 and os.path.exists(file_path):
         try:
@@ -162,7 +162,7 @@ class AudioPipeline:
             for sub in ["01_Input_Audio", "02_Processed_Audio", "03_Output_Stems"]:
                 os.makedirs(os.path.join(self.drive_sync_dir, sub), exist_ok=True)
         except Exception as e:
-            print(f"[Drive Sync] Không thể tạo thư mục sync: {e}")
+            print(f"[Drive Sync] Failed to create sync directory: {e}")
 
     def set_drive_sync_dir(self, new_path: str) -> None:
         if new_path and os.path.exists(os.path.dirname(new_path)):
@@ -204,7 +204,7 @@ class AudioPipeline:
             with open(TRACKS_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.tracks, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"[AudioPipeline] Lỗi lưu tracks.json: {e}")
+            print(f"[AudioPipeline] Error saving tracks.json: {e}")
 
     def get_tracks(self) -> List[Dict[str, Any]]:
         return list(self.tracks.values())
@@ -248,7 +248,7 @@ class AudioPipeline:
                         else:
                             os.remove(target_path)
                     except Exception as e:
-                        print(f"[Drive Cleanup] Không thể xóa {target_path}: {e}")
+                        print(f"[Drive Cleanup] Failed to remove {target_path}: {e}")
 
         if deleted:
             self._sync_default_playlist()
@@ -287,7 +287,7 @@ class AudioPipeline:
             with open(PLAYLISTS_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.playlists_data, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"[AudioPipeline] Lỗi lưu playlists.json: {e}")
+            print(f"[AudioPipeline] Error saving playlists.json: {e}")
 
     def _sync_default_playlist(self) -> None:
         """Đồng bộ đảm bảo toàn bộ bài trong self.tracks có mặt trong default playlist và loại bỏ bài đã xóa."""
@@ -413,7 +413,7 @@ class AudioPipeline:
 
         self._save_tracks()
         if cleaned > 0:
-            print(f"[AudioPipeline] Đã dọn dẹp {cleaned} file stems cũ và chuyển sang 4 stems mode!")
+            print(f"[AudioPipeline] Cleaned {cleaned} legacy stems. Switched to 4-stems mode.")
 
     def get_pending_colab_count(self) -> int:
         input_dir = os.path.join(self.drive_sync_dir, "01_Input_Audio")
@@ -457,7 +457,7 @@ class AudioPipeline:
                         if not os.path.exists(dst) or os.path.getsize(dst) == 0:
                             shutil.copy2(src, dst)
                 except Exception as e:
-                    print(f"[Drive Sync] Lỗi copy 4 stems {video_id}: {e}")
+                    print(f"[Drive Sync] Error copying 4 stems for {video_id}: {e}")
 
                 meta_data = {}
                 if os.path.exists(meta_file):
@@ -497,7 +497,7 @@ class AudioPipeline:
         if synced_count > 0:
             self._save_tracks()
             self._sync_default_playlist()
-            print(f"[Drive Sync] Đã cập nhật {synced_count} bài từ Colab 4 Stems!")
+            print(f"[Drive Sync] Successfully synced {synced_count} tracks from Colab 4 Stems!")
 
         return synced_count
 
@@ -587,15 +587,15 @@ class AudioPipeline:
                 if not os.path.exists(input_drive_file):
                     try:
                         shutil.copy2(original_mp3, input_drive_file)
-                        print(f"[Colab Batch] Đã nạp file local {track_id}.mp3 vào 01_Input_Audio/")
+                        print(f"[Colab Batch] Uploaded local file {track_id}.mp3 to 01_Input_Audio/")
                     except Exception as e:
-                        print(f"[Colab Batch] Lỗi nạp file local vào Drive: {e}")
+                        print(f"[Colab Batch] Failed to upload local file to Drive: {e}")
             else:
                 self.job_queue.put(track_id)
 
         self._save_tracks()
         self._sync_default_playlist()
-        print(f"[AudioPipeline] Nạp file local thành công: '{title}' ({track_id}) - Cache Hit: {cache_hit}")
+        print(f"[AudioPipeline] Local file loaded successfully: {track_id} - Cache Hit: {cache_hit}")
 
         return track_data
 
@@ -626,7 +626,7 @@ class AudioPipeline:
         if is_playlist:
             raw_entries = list(info.get("entries", []))
             playlist_title = info.get("title", "YouTube Playlist")
-            print(f"[AudioPipeline] Phát hiện Playlist: '{playlist_title}' ({len(raw_entries)} bài)")
+            print(f"[AudioPipeline] Detected Playlist: '{playlist_title}' ({len(raw_entries)} items)")
             for item in raw_entries:
                 if item and item.get("id"):
                     entries.append({
@@ -706,7 +706,7 @@ class AudioPipeline:
             entry = self.download_queue.get()
             video_id = entry["id"]
             self.current_download = video_id
-            print(f"[Download Worker] Đang tải audio cho: {entry['title']} ({video_id})...")
+            print(f"[Download Worker] Downloading audio for: {video_id}...")
 
             track_dir = os.path.join(CACHE_DIR, video_id)
             os.makedirs(track_dir, exist_ok=True)
@@ -728,7 +728,7 @@ class AudioPipeline:
                     info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=True)
 
                 original_mp3 = os.path.join(track_dir, "original.mp3")
-                print(f"[Download Worker] Tải thành công: {entry['title']}")
+                print(f"[Download Worker] Successfully downloaded: {video_id}")
 
                 track = self.tracks.get(video_id)
                 if track:
@@ -742,9 +742,9 @@ class AudioPipeline:
                         input_drive_file = os.path.join(self.drive_sync_dir, "01_Input_Audio", f"{video_id}.mp3")
                         try:
                             shutil.copy2(original_mp3, input_drive_file)
-                            print(f"[Colab Batch] Đã nạp {video_id}.mp3 vào 01_Input_Audio/ trên Drive")
+                            print(f"[Colab Batch] Pushed {video_id}.mp3 to 01_Input_Audio/ on Drive")
                         except Exception as e:
-                            print(f"[Colab Batch] Lỗi ném file vào Drive: {e}")
+                            print(f"[Colab Batch] Failed to push file to Drive: {e}")
                         track["status"] = "WAITING_COLAB"
                     else:
                         track["status"] = "QUEUED"
@@ -752,7 +752,7 @@ class AudioPipeline:
 
                     self._save_tracks()
             except Exception as e:
-                print(f"[Download Worker] Lỗi tải {video_id}: {e}")
+                print(f"[Download Worker] Download error for {video_id}: {e}")
             finally:
                 self.current_download = None
                 self.download_queue.task_done()
@@ -767,7 +767,7 @@ class AudioPipeline:
                 continue
 
             try:
-                print(f"[Local Demucs] Bắt đầu tách: {track['title']} ({video_id})...")
+                print(f"[Local Demucs] Starting separation: {video_id}...")
                 track["status"] = "PROCESSING"
                 self._save_tracks()
 
@@ -775,9 +775,9 @@ class AudioPipeline:
 
                 track["status"] = "READY"
                 track["has_stems"] = True
-                print(f"[Local Demucs] Tách thành công: {track['title']}!")
+                print(f"[Local Demucs] Separation complete: {video_id}!")
             except Exception as e:
-                print(f"[Local Demucs] Lỗi tách: {e}")
+                print(f"[Local Demucs] Separation error: {e}")
                 track["status"] = "FALLBACK"
                 track["error"] = str(e)
             finally:

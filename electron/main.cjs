@@ -55,7 +55,7 @@ function killPythonProcess() {
 
   if (pythonProcess && pythonProcess.pid) {
     const pid = pythonProcess.pid;
-    log(`[Electron] Đang tắt tiến trình Python Backend (PID: ${pid})...`);
+    log(`[Electron] Terminating Python Backend process (PID: ${pid})...`);
 
     if (currentPort) {
       try {
@@ -80,7 +80,7 @@ function killPythonProcess() {
         }
       } catch (e) {}
       pythonProcess = null;
-      log(`[Electron] Python backend đã tắt hoàn toàn.`);
+      log(`[Electron] Python backend terminated cleanly.`);
     }, 400);
   }
 }
@@ -159,11 +159,11 @@ async function createWindow(port) {
 
 // 5. Khởi động ứng dụng Electron
 app.whenReady().then(async () => {
-  log(`=== KHỞI ĐỘNG ỨNG DỤNG (isPackaged: ${app.isPackaged}) ===`);
+  log(`=== APPLICATION STARTUP (isPackaged: ${app.isPackaged}) ===`);
   try {
     currentPort = await getFreePort(8000);
     process.env.BACKEND_PORT = String(currentPort);
-    log(`[Electron] Đã chọn Port: ${currentPort}`);
+    log(`[Electron] Selected Port: ${currentPort}`);
 
     const backendDir = app.isPackaged
       ? path.join(process.resourcesPath, "backend")
@@ -174,16 +174,16 @@ app.whenReady().then(async () => {
 
     let spawnCmd, spawnArgs;
     if (fs.existsSync(standaloneExe)) {
-      log(`[Electron] Phát hiện Backend Engine độc lập: ${standaloneExe}`);
+      log(`[Electron] Detected Standalone Backend Engine: ${standaloneExe}`);
       spawnCmd = standaloneExe;
       spawnArgs = ["--port", String(currentPort), "--watchdog"];
     } else {
-      log(`[Electron] Sử dụng Python hệ thống: python ${backendScript}`);
+      log(`[Electron] Using System Python: python ${backendScript}`);
       spawnCmd = "python";
       spawnArgs = ["-u", backendScript, "--port", String(currentPort), "--watchdog"];
     }
 
-    log(`[Electron] Chuẩn bị spawn: "${spawnCmd}"`);
+    log(`[Electron] Spawning process: "${spawnCmd}"`);
     pythonProcess = spawn(spawnCmd, spawnArgs, {
       cwd: backendDir,
       stdio: "pipe",
@@ -208,20 +208,20 @@ app.whenReady().then(async () => {
     });
 
     pythonProcess.on("error", (err) => {
-      log(`[Backend Process Error] Không thể khởi chạy process: ${err.message}`);
+      log(`[Backend Process Error] Failed to launch backend: ${err.message}`);
       dialog.showErrorBox(
-        "Lỗi Khởi Chạy Bộ Não Backend",
-        `Không thể thực thi tiến trình Backend (${spawnCmd}):\n\n${err.message}\n\nNguyên nhân có thể do Windows Defender hoặc Antivirus đã chặn file này.\nXem chi tiết tại:\n${logFilePath}`
+        "Backend Launch Error / Lỗi Khởi Chạy Backend",
+        `Failed to execute backend process (${spawnCmd}):\n\n${err.message}\n\nPlease check antivirus or log file:\n${logFilePath}`
       );
     });
 
     pythonProcess.on("exit", (code, signal) => {
-      log(`[Backend Exit] Thoát với mã: ${code}, signal: ${signal}`);
+      log(`[Backend Exit] Process exited with code: ${code}, signal: ${signal}`);
       if (code !== 0 && code !== null && !isQuitting) {
-        const errorSummary = backendOutputLogs.slice(-10).join("\n") || "Không có thông tin lỗi chi tiết.";
+        const errorSummary = backendOutputLogs.slice(-10).join("\n") || "No detailed error output.";
         dialog.showErrorBox(
-          "Lỗi Tiến Trình Backend",
-          `Bộ não backend đã dừng đột ngột (Mã lỗi: ${code}).\n\nChi tiết log gần nhất:\n${errorSummary}\n\nVui lòng kiểm tra file nhật ký tại:\n${logFilePath}`
+          "Backend Process Error / Lỗi Tiến Trình Backend",
+          `Backend process stopped unexpectedly (Exit Code: ${code}).\n\nRecent output:\n${errorSummary}\n\nDiagnostic log file:\n${logFilePath}`
         );
       }
       if (mainWindow && !mainWindow.isDestroyed() && !isQuitting) {
@@ -229,16 +229,16 @@ app.whenReady().then(async () => {
       }
     });
 
-    log(`[Electron] Đang chờ Backend phản hồi tại http://127.0.0.1:${currentPort}...`);
+    log(`[Electron] Waiting for Backend response at http://127.0.0.1:${currentPort}...`);
     await waitForBackend(currentPort);
-    log(`[Electron] Backend sẵn sàng! Đang mở cửa sổ chính...`);
+    log(`[Electron] Backend is ready! Opening main window...`);
 
     await createWindow(currentPort);
   } catch (err) {
     log(`[Electron Startup Catch] ${err.stack || err.message}`);
     dialog.showErrorBox(
-      "Không Thể Mở Ứng Dụng",
-      `Ứng dụng không thể kết nối tới Backend sau 25 giây:\n\n${err.message}\n\nXem file log chẩn đoán tại:\n${logFilePath}`
+      "Application Startup Error / Lỗi Mở Ứng Dụng",
+      `Could not connect to Backend within 25s:\n\n${err.message}\n\nDiagnostic log file:\n${logFilePath}`
     );
     killPythonProcess();
     app.quit();

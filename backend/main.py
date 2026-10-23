@@ -60,7 +60,7 @@ def start_watchdog_thread():
             if len(manager.active_connections) == 0:
                 elapsed = time.time() - last_heartbeat_time
                 if elapsed > 8.0:
-                    print(f"[Watchdog Suicide] Mất kết nối với Frontend ({elapsed:.1f}s > 8s). Tự động đóng Backend!")
+                    print(f"[Watchdog] Lost frontend connection ({elapsed:.1f}s > 8s). Terminating backend process.")
                     os._exit(0)
 
 watchdog_t = threading.Thread(target=start_watchdog_thread, daemon=True)
@@ -286,7 +286,7 @@ def api_heartbeat():
 def api_shutdown():
     def delayed_exit():
         time.sleep(0.3)
-        print("[System] Nhận tín hiệu tắt từ Desktop Master. Đóng tiến trình Python!")
+        print("[System] Received shutdown signal from Desktop Master. Exiting Python.")
         os._exit(0)
     threading.Thread(target=delayed_exit, daemon=True).start()
     return {"status": "shutting_down"}
