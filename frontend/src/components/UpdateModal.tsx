@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Sparkles, Download, CheckCircle2, ExternalLink, X, RefreshCw, ArrowRight, Shield } from "lucide-react";
-import type { UpdateInfo } from "../services/updateChecker";
+import { type UpdateInfo, APP_VERSION } from "../services/updateChecker";
 
 interface UpdateModalProps {
   isOpen: boolean;
@@ -75,7 +75,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
         <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 font-mono text-xs mb-6">
           <div className="flex items-center gap-2">
             <span className="text-slate-400">Phiên bản hiện tại:</span>
-            <span className="font-bold text-slate-200">v{updateInfo?.currentVersion || "1.0.2"}</span>
+            <span className="font-bold text-slate-200">v{updateInfo?.currentVersion || APP_VERSION}</span>
           </div>
 
           {hasUpdate ? (

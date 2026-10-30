@@ -1,6 +1,7 @@
 import React from "react";
 import { Activity, Cpu, HardDrive, Sparkles, Wifi, Mic, MicOff, BarChart2, Scale } from "lucide-react";
 import type { SystemState, QueueState } from "../hooks/useDesktopSocket";
+import { APP_VERSION } from "../services/updateChecker";
 
 interface GeekHUDProps {
   connected: boolean;
@@ -66,7 +67,7 @@ export const GeekHUD: React.FC<GeekHUDProps> = ({
             }`}
             title={hasUpdate ? "Có bản cập nhật mới! Bấm để xem" : "Phiên bản hiện tại. Bấm để kiểm tra cập nhật"}
           >
-            <span>v1.0.2</span>
+            <span>v{APP_VERSION}</span>
             {hasUpdate && (
               <span className="relative flex h-1.5 w-1.5">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75"></span>
