@@ -30,6 +30,12 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     }
   };
 
+  const handleDownloadPortable = () => {
+    if (updateInfo?.portableUrl) {
+      window.open(updateInfo.portableUrl, "_blank");
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-fade-in">
       <div className="relative w-full max-w-xl rounded-2xl border border-cyan-500/30 bg-[#0b101b] p-6 shadow-2xl shadow-cyan-500/20 glow-cyan">
@@ -155,15 +161,28 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                 className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-xs font-bold shadow-lg shadow-cyan-500/25 transition-all flex items-center justify-center gap-2 active:scale-95"
               >
                 <Download className="h-4 w-4" />
-                <span>{downloadStarted ? "Đang Tải Về (.exe)..." : "Cập Nhật Ngay"}</span>
+                <span>{downloadStarted ? "Đang Mở Tải Về..." : "Cập Nhật Ngay (Bản Setup)"}</span>
               </button>
             )}
           </div>
         </div>
 
+        {/* Portable alternative link */}
+        {hasUpdate && updateInfo?.portableUrl && (
+          <div className="mt-4 flex items-center justify-center gap-2 text-[11px] text-slate-400">
+            <span>Bạn dùng bản không cần cài đặt?</span>
+            <button
+              onClick={handleDownloadPortable}
+              className="text-cyan-400 hover:text-cyan-300 underline font-medium cursor-pointer transition-colors"
+            >
+              Tải Bản Portable (.exe)
+            </button>
+          </div>
+        )}
+
         {/* GitHub link */}
         {updateInfo?.htmlUrl && (
-          <div className="mt-4 text-center">
+          <div className="mt-2 text-center">
             <a
               href={updateInfo.htmlUrl}
               target="_blank"
