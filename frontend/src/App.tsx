@@ -134,8 +134,12 @@ export function App() {
       setAmbientType(adaptiveEngine.getAmbientType());
       setAmbientVolume(adaptiveEngine.getAmbientVolume());
       setSpatial8D(adaptiveEngine.getSpatial8DState());
+      const state = adaptiveEngine.getPlaybackState();
+      if (!state.isPlaying && isPlaying) {
+        setIsPlaying(false);
+      }
     });
-  }, []);
+  }, [isPlaying]);
 
   // Lấy danh sách bài hát từ backend
   const fetchTracks = useCallback(async () => {
@@ -247,13 +251,13 @@ export function App() {
   };
 
   // Nút mở khóa Autoplay Policy
-  const handleInitializeEngine = () => {
-    adaptiveEngine.initContext();
+  const handleInitializeEngine = async () => {
+    await adaptiveEngine.initContext();
     setEngineReady(true);
   };
 
   const handlePlayTrack = async (track: TrackMeta) => {
-    if (!engineReady) handleInitializeEngine();
+    if (!engineReady) await handleInitializeEngine();
     isSwitchingTrackRef.current = true;
     isTransitioningRef.current = false;
     setIsTransitioning(false);
@@ -263,6 +267,9 @@ export function App() {
     setIsPlaying(true);
     try {
       await adaptiveEngine.playTrack(track, 0);
+    } catch (err) {
+      console.error("[App] Lỗi phát bài:", err);
+      setIsPlaying(false);
     } finally {
       setTimeout(() => {
         isSwitchingTrackRef.current = false;

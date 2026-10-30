@@ -251,25 +251,31 @@ def api_stream_audio(track_id: str, stem_type: str):
                         return p
         return None
 
+    audio_headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+
     # Nếu yêu cầu bài gốc
     if stem_type == "original":
         orig_file = find_original_file()
         if orig_file:
-            return FileResponse(orig_file, media_type=get_audio_media_type(orig_file))
+            return FileResponse(orig_file, media_type=get_audio_media_type(orig_file), headers=audio_headers)
 
     # Nếu yêu cầu 1 trong 4 stems: vocals, other, bass, drums
     stem_file = os.path.join(track_dir, f"{stem_type}.mp3")
     if os.path.exists(stem_file):
-        return FileResponse(stem_file, media_type="audio/mpeg")
+        return FileResponse(stem_file, media_type="audio/mpeg", headers=audio_headers)
 
     # Tương thích ngược: calm -> other.mp3, energy -> drums.mp3 (nếu có)
     if stem_type == "calm" and os.path.exists(os.path.join(track_dir, "other.mp3")):
-        return FileResponse(os.path.join(track_dir, "other.mp3"), media_type="audio/mpeg")
+        return FileResponse(os.path.join(track_dir, "other.mp3"), media_type="audio/mpeg", headers=audio_headers)
 
     # Fallback về bài gốc nếu stem chưa sẵn sàng
     orig_file = find_original_file()
     if orig_file:
-        return FileResponse(orig_file, media_type=get_audio_media_type(orig_file))
+        return FileResponse(orig_file, media_type=get_audio_media_type(orig_file), headers=audio_headers)
 
     raise HTTPException(status_code=404, detail=f"File audio {stem_type} chưa sẵn sàng")
 

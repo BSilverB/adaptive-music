@@ -192,7 +192,12 @@ export class AdaptiveEngine {
       if (savedState) {
         const parsed = JSON.parse(savedState);
         if (parsed.vocals && parsed.other && parsed.bass && parsed.drums) {
-          this.stemState = parsed;
+          const allMutedOrZero = Object.values(parsed).every(
+            (s: any) => !s || s.muted || s.volume <= 0.01 || isNaN(s.volume)
+          );
+          if (!allMutedOrZero) {
+            this.stemState = parsed;
+          }
         }
       }
       const savedMode = localStorage.getItem("adaptive_stem_mixer_mode");
@@ -409,6 +414,7 @@ export class AdaptiveEngine {
 
     if (this.ambientType === "off" || (!this.isPlaying && !this.isPaused)) {
       this.ambientGain.gain.cancelScheduledValues(now);
+      this.ambientGain.gain.setValueAtTime(this.ambientGain.gain.value, now);
       this.ambientGain.gain.linearRampToValueAtTime(0.0, now + rampTime);
       setTimeout(() => {
         if (this.ambientType === "off" || (!this.isPlaying && !this.isPaused)) {
@@ -470,6 +476,7 @@ export class AdaptiveEngine {
     }
 
     this.ambientGain.gain.cancelScheduledValues(now);
+    this.ambientGain.gain.setValueAtTime(this.ambientGain.gain.value, now);
     this.ambientGain.gain.linearRampToValueAtTime(targetGain, now + rampTime);
   }
 
@@ -522,7 +529,7 @@ export class AdaptiveEngine {
     return res;
   }
 
-  public initContext(): AudioContext {
+  public async initContext(): Promise<AudioContext> {
     if (!this.audioCtx) {
       const AudioContextClass =
         window.AudioContext ||
@@ -530,7 +537,11 @@ export class AdaptiveEngine {
       this.audioCtx = new AudioContextClass();
     }
     if (this.audioCtx.state === "suspended") {
-      this.audioCtx.resume();
+      try {
+        await this.audioCtx.resume();
+      } catch (err) {
+        console.warn("[AudioEngine] Không thể resume AudioContext:", err);
+      }
     }
     if (!this.duckingGain) {
       this.duckingGain = this.audioCtx.createGain();
@@ -549,6 +560,7 @@ export class AdaptiveEngine {
     if (!this.duckingGain) return;
     const now = this.audioCtx.currentTime;
     this.duckingGain.gain.cancelScheduledValues(now);
+    this.duckingGain.gain.setValueAtTime(this.duckingGain.gain.value, now);
     if (ducked) {
       this.duckingGain.gain.linearRampToValueAtTime(0.10, now + 0.3);
     } else {
@@ -575,7 +587,7 @@ export class AdaptiveEngine {
   public async preloadTrack(track: TrackMeta): Promise<void> {
     if (this.currentTrackId === track.id || this.preloadedTrackId === track.id) return;
     try {
-      this.initContext();
+      await this.initContext();
       if (track.has_stems) {
         const [vocals, other, bass, drums] = await Promise.all([
           this.fetchAndDecode(`${getApiBaseUrl()}/api/tracks/${track.id}/audio/vocals`),
@@ -845,8 +857,8 @@ export class AdaptiveEngine {
   }
 
   private async fetchAndDecode(url: string): Promise<AudioBuffer> {
-    const ctx = this.initContext();
-    const resp = await fetch(url);
+    const ctx = await this.initContext();
+    const resp = await fetch(url, { cache: "no-cache" });
     if (!resp.ok) {
       throw new Error(`Lỗi tải audio: ${resp.status} ${resp.statusText}`);
     }
@@ -855,13 +867,13 @@ export class AdaptiveEngine {
   }
 
   public async playTrack(track: TrackMeta, offsetSec: number = 0): Promise<void> {
-    this.initContext();
+    await this.initContext();
     this.stopSources();
 
     const mySessionId = ++this.playSessionId;
     this.currentTrack = track;
     this.pausedAtOffset = offsetSec;
-    this.playbackStartTime = this.audioCtx ? this.audioCtx.currentTime - offsetSec : 0;
+    this.playbackStartTime = 0; // Đặt 0 khi đang tải mạng, chỉ kích hoạt đồng hồ khi startStemsPlayback chạy
 
     // Giải phóng buffer cũ hoặc tái sử dụng từ preload
     if (this.currentTrackId !== track.id) {
@@ -936,7 +948,7 @@ export class AdaptiveEngine {
       this.currentTrack = null;
       this.stopSources();
       this.notifyListeners();
-      return;
+      throw err;
     }
 
     this.notifyListeners();
@@ -966,7 +978,18 @@ export class AdaptiveEngine {
     this.masterAnalyser.fftSize = 64;
     this.masterAnalyser.smoothingTimeConstant = 0.8;
     this.masterGain.connect(this.masterAnalyser);
-    this.masterAnalyser.connect(this.duckingGain || this.audioCtx.destination);
+
+    // Đảm bảo duckingGain luôn tồn tại và bật đủ âm lượng (không bao giờ bị kẹt 0)
+    if (!this.duckingGain) {
+      this.duckingGain = this.audioCtx.createGain();
+      this.duckingGain.gain.setValueAtTime(this.isDucked ? 0.10 : 1.0, now);
+      this.duckingGain.connect(this.audioCtx.destination);
+    } else {
+      const targetGain = this.isDucked ? 0.10 : 1.0;
+      this.duckingGain.gain.cancelScheduledValues(now);
+      this.duckingGain.gain.setValueAtTime(targetGain, now);
+    }
+    this.masterAnalyser.connect(this.duckingGain);
 
     // Dynamic Filter cho Drums & Bass
     this.rhythmFilter = this.audioCtx.createBiquadFilter();
@@ -1017,6 +1040,10 @@ export class AdaptiveEngine {
           const pannerV = this.audioCtx.createPanner();
           pannerV.panningModel = "HRTF";
           pannerV.distanceModel = "inverse";
+          pannerV.refDistance = 1;
+          pannerV.maxDistance = 10000;
+          pannerV.rolloffFactor = 1;
+          pannerV.coneInnerAngle = 360;
           this.pannerVocals = pannerV;
           stemAnalyser.connect(pannerV);
           pannerV.connect(this.masterGain);
@@ -1057,14 +1084,25 @@ export class AdaptiveEngine {
   private startFallbackPlayback(offsetSec: number): void {
     if (!this.audioCtx || !this.originalBuffer) return;
 
+    const now = this.audioCtx.currentTime;
     this.masterGain = this.audioCtx.createGain();
-    this.masterGain.gain.setValueAtTime(1.0, this.audioCtx.currentTime);
+    this.masterGain.gain.setValueAtTime(1.0, now);
 
     this.masterAnalyser = this.audioCtx.createAnalyser();
     this.masterAnalyser.fftSize = 64;
     this.masterAnalyser.smoothingTimeConstant = 0.8;
     this.masterGain.connect(this.masterAnalyser);
-    this.masterAnalyser.connect(this.duckingGain || this.audioCtx.destination);
+
+    if (!this.duckingGain) {
+      this.duckingGain = this.audioCtx.createGain();
+      this.duckingGain.gain.setValueAtTime(this.isDucked ? 0.10 : 1.0, now);
+      this.duckingGain.connect(this.audioCtx.destination);
+    } else {
+      const targetGain = this.isDucked ? 0.10 : 1.0;
+      this.duckingGain.gain.cancelScheduledValues(now);
+      this.duckingGain.gain.setValueAtTime(targetGain, now);
+    }
+    this.masterAnalyser.connect(this.duckingGain);
 
     this.origSource = this.audioCtx.createBufferSource();
     this.origSource.buffer = this.originalBuffer;
@@ -1150,6 +1188,7 @@ export class AdaptiveEngine {
       if (gainNode) {
         const targetGain = this.computeEffectiveGain(stem);
         gainNode.gain.cancelScheduledValues(now);
+        gainNode.gain.setValueAtTime(gainNode.gain.value, now);
         gainNode.gain.linearRampToValueAtTime(targetGain, now + rampTime);
       }
     }
@@ -1162,6 +1201,7 @@ export class AdaptiveEngine {
         targetFreq = 350 + Math.min(1.0, this.currentEnergy / 0.8) * 19650;
       }
       this.rhythmFilter.frequency.cancelScheduledValues(now);
+      this.rhythmFilter.frequency.setValueAtTime(this.rhythmFilter.frequency.value, now);
       this.rhythmFilter.frequency.exponentialRampToValueAtTime(
         Math.max(100, targetFreq),
         now + rampTime
@@ -1173,12 +1213,12 @@ export class AdaptiveEngine {
     if (!this.audioCtx || !this.fallbackFilter) return;
     const now = this.audioCtx.currentTime;
 
+    this.fallbackFilter.frequency.cancelScheduledValues(now);
+    this.fallbackFilter.frequency.setValueAtTime(this.fallbackFilter.frequency.value, now);
     if (this.fallbackMode === "full") {
-      this.fallbackFilter.frequency.cancelScheduledValues(now);
       this.fallbackFilter.frequency.linearRampToValueAtTime(20000, now + rampTime);
     } else {
       const targetFreq = 500 + energy * 19500;
-      this.fallbackFilter.frequency.cancelScheduledValues(now);
       this.fallbackFilter.frequency.exponentialRampToValueAtTime(
         Math.max(100, targetFreq),
         now + rampTime

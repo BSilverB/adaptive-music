@@ -5,18 +5,18 @@
 
 export function getBackendPort(): number {
   if (typeof window !== "undefined") {
-    // 1. Kiểm tra biến môi trường Electron inject qua Preload script
-    if ((window as any).__BACKEND_PORT__) {
-      return Number((window as any).__BACKEND_PORT__);
-    }
-
-    // 2. Kiểm tra tham số URL (?port=xxxx)
+    // 1. Kiểm tra tham số URL (?port=xxxx) - Luôn ưu tiên tham số URL do Electron loadFile truyền trực tiếp
     if (window.location?.search) {
       const params = new URLSearchParams(window.location.search);
       const p = params.get("port");
-      if (p && !isNaN(Number(p))) {
+      if (p && !isNaN(Number(p)) && Number(p) > 0) {
         return Number(p);
       }
+    }
+
+    // 2. Kiểm tra biến môi trường Electron inject qua Preload script
+    if ((window as any).__BACKEND_PORT__ && Number((window as any).__BACKEND_PORT__) > 0) {
+      return Number((window as any).__BACKEND_PORT__);
     }
   }
 
